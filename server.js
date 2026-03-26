@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,223 +10,173 @@ app.use(express.json());
 
 let cachedRecords = null;
 let cacheTime = null;
-const CACHE_TTL_MS = 1000 * 60 * 60;
+const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
 
-const TARGET_URL = 'https://records.uspa.net/records.php?location=ipl-world&status=drug-tested&event=raw-powerlifting';
+// The real Infoweave REST API discovered from network logs
+// hierarchy_category_id=55 = IPL World, hierarchy_item_id=1 = Drug Tested, sub_hierarchy_item_id=58 = Raw Full Power
+const API_URL = 'https://app.infoweave.io/embed/uspa/ais/public/records/queryget?hierarchy_category_id=55&hierarchy_item_id=1&sub_hierarchy_item_id=58';
 
-async function scrapeRecords() {
-  console.log('[scrape] Launching browser...');
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
+async function fetchRecords() {
+  console.log('[fetch] Calling Infoweave API...');
+
+  const res = await fetch(API_URL, {
+    headers: {
+      'Accept': 'application/json',
+      'Origin': 'https://infoweave-13b9d.web.app',
+      'Referer': 'https://infoweave-13b9d.web.app/',
+      'User-Agent': 'Mozilla/5.0 (compatible; USPA-Proxy/1.0)',
+    }
   });
 
-  try {
-    const page = await browser.newPage();
-    const capturedResponses = [];
+  if (!res.ok) throw new Error(`API returned HTTP ${res.status}`);
 
-    page.on('response', async (response) => {
-      const url = response.url();
-      const ct = response.headers()['content-type'] || '';
-      if (ct.includes('json') || url.includes('firestore') || url.includes('firebase') || url.includes('googleapis') || url.includes('embedloader')) {
-        try {
-          const text = await response.text();
-          capturedResponses.push({ url, status: response.status(), text });
-          console.log(`[net] ${response.status()} ${url.substring(0, 120)}`);
-          console.log(`[net] preview: ${text.substring(0, 600)}`);
-        } catch (e) {
-          console.log(`[net] body read error for ${url}: ${e.message}`);
-        }
-      }
-    });
+  const text = await res.text();
+  console.log(`[fetch] Response length: ${text.length}`);
+  console.log(`[fetch] Preview: ${text.substring(0, 500)}`);
 
-    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 5000));
-
-    // Log DOM and iframes
-    const bodyPreview = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
-    console.log('[dom]', bodyPreview);
-
-    const scripts = await page.evaluate(() =>
-      [...document.querySelectorAll('script[src], iframe[src]')].map(e => e.src || e.getAttribute('src'))
-    );
-    console.log('[scripts/iframes]', JSON.stringify(scripts));
-
-    // Try clicking divs that look like accordion headers
-    try {
-      await page.evaluate(() => {
-        document.querySelectorAll('div, section, li').forEach(el => {
-          if (el.children.length < 5) el.click();
-        });
-      });
-      await new Promise(r => setTimeout(r, 3000));
-    } catch (_) {}
-
-    // Second wave of responses after clicking
-    const bodyAfter = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
-    console.log('[dom-after-click]', bodyAfter);
-
-    console.log(`[scrape] ${capturedResponses.length} network responses captured`);
-    capturedResponses.forEach(({url, text}) => {
-      console.log(`[full-response] URL: ${url}`);
-      console.log(`[full-response] Body (1200 chars): ${text.substring(0, 1200)}`);
-    });
-
-    const allRecords = [];
-    for (const { url, text } of capturedResponses) {
-      const parsed = tryParseRecords(url, text);
-      if (parsed.length > 0) {
-        console.log(`[parse] ${parsed.length} records from ${url.substring(0, 80)}`);
-        allRecords.push(...parsed);
-      }
-    }
-
-    await page.close();
-    console.log(`[scrape] Total: ${allRecords.length}`);
-    return allRecords;
-  } finally {
-    await browser.close();
-  }
+  const json = JSON.parse(text);
+  const records = parseResponse(json);
+  console.log(`[fetch] Parsed ${records.length} records`);
+  return records;
 }
 
-function tryParseRecords(url, text) {
-  if (!text || text.length < 10) return [];
-  let json;
-  try { json = JSON.parse(text); } catch (_) { return []; }
+function parseResponse(json) {
+  // Log the top-level shape so we can see what we're working with
+  if (Array.isArray(json)) {
+    console.log(`[parse] Top-level array, ${json.length} items`);
+    if (json.length > 0) console.log(`[parse] First item keys: ${Object.keys(json[0]).join(', ')}`);
+    if (json.length > 0) console.log(`[parse] First item: ${JSON.stringify(json[0]).substring(0, 400)}`);
+  } else if (typeof json === 'object') {
+    console.log(`[parse] Top-level object keys: ${Object.keys(json).join(', ')}`);
+    // Log shape of each key
+    for (const key of Object.keys(json)) {
+      const val = json[key];
+      if (Array.isArray(val)) {
+        console.log(`[parse] key "${key}": array of ${val.length}`);
+        if (val.length > 0) console.log(`[parse] key "${key}" first item: ${JSON.stringify(val[0]).substring(0, 300)}`);
+      } else {
+        console.log(`[parse] key "${key}": ${JSON.stringify(val).substring(0, 100)}`);
+      }
+    }
+  }
 
   const records = [];
 
-  // Log full structure for any object
-  if (typeof json === 'object' && !Array.isArray(json)) {
-    console.log(`[shape] keys: ${Object.keys(json).join(', ')}`);
-  }
-
-  // Firestore REST: { documents: [...] }
-  if (json.documents && Array.isArray(json.documents)) {
-    console.log(`[shape] Firestore REST, ${json.documents.length} docs`);
-    json.documents.forEach(doc => {
-      if (doc.fields) {
-        console.log(`[shape] doc fields: ${Object.keys(doc.fields).join(', ')}`);
-        records.push(...firestoreDocToRecord(doc));
-      }
-    });
-    return records;
-  }
-
-  // Firestore runQuery: [{ document: {...} }]
+  // Try flat array
   if (Array.isArray(json)) {
-    console.log(`[shape] array of ${json.length}, first keys: ${json[0] ? Object.keys(json[0]).join(', ') : 'empty'}`);
-    json.forEach(item => {
-      if (item && item.document && item.document.fields) {
-        console.log(`[shape] runQuery doc fields: ${Object.keys(item.document.fields).join(', ')}`);
-        records.push(...firestoreDocToRecord(item.document));
-      } else if (item && typeof item === 'object') {
-        const r = flexRecord(item);
-        if (r) records.push(r);
-      }
-    });
+    json.forEach(item => { const r = normalizeRecord(item); if (r) records.push(r); });
     return records;
   }
 
-  // Any other object — try all array-valued keys
-  if (typeof json === 'object') {
-    for (const key of Object.keys(json)) {
-      if (Array.isArray(json[key]) && json[key].length > 0) {
-        console.log(`[shape] key "${key}" has ${json[key].length} items, first: ${JSON.stringify(json[key][0]).substring(0, 200)}`);
-        json[key].forEach(item => {
-          if (item && item.document) records.push(...firestoreDocToRecord(item.document));
-          else { const r = flexRecord(item); if (r) records.push(r); }
-        });
-      }
+  // Try common wrapper keys
+  const candidates = ['records','data','results','items','rows','list','powerlifting','lifts'];
+  for (const key of candidates) {
+    if (json[key] && Array.isArray(json[key]) && json[key].length > 0) {
+      console.log(`[parse] Using key "${key}"`);
+      json[key].forEach(item => { const r = normalizeRecord(item); if (r) records.push(r); });
+      return records;
+    }
+  }
+
+  // Try any array-valued key
+  for (const key of Object.keys(json)) {
+    if (Array.isArray(json[key]) && json[key].length > 0) {
+      console.log(`[parse] Falling back to key "${key}"`);
+      json[key].forEach(item => { const r = normalizeRecord(item); if (r) records.push(r); });
+      if (records.length > 0) return records;
     }
   }
 
   return records;
 }
 
-function firestoreDocToRecord(doc) {
-  if (!doc || !doc.fields) return [];
-  const f = doc.fields;
-  const get = (k) => {
-    const v = f[k];
-    if (!v) return '';
-    return v.stringValue ?? v.integerValue ?? v.doubleValue ?? v.booleanValue ?? '';
-  };
-  console.log('[firestore fields]', Object.keys(f).join(', '));
-  return [{
-    division:    get('division') || get('div') || get('age_class') || get('ageClass') || '',
-    gender:      get('gender') || get('sex') || '',
-    weightClass: get('weightClass') || get('weight_class') || get('wc') || get('bodyweight') || '',
-    name:        get('lifterName') || get('name') || get('lifter') || get('athlete') || '',
-    squat:       parseFloat(get('squat') || get('sq') || get('best_squat') || 0) || 0,
-    bench:       parseFloat(get('bench') || get('bp') || get('best_bench') || 0) || 0,
-    deadlift:    parseFloat(get('deadlift') || get('dl') || get('best_deadlift') || 0) || 0,
-    total:       parseFloat(get('total') || 0) || 0,
-    date:        get('date') || get('meetDate') || get('meet_date') || '',
-    meet:        get('meet') || get('meetName') || get('meet_name') || get('competition') || '',
-  }];
-}
-
-function flexRecord(item) {
+function normalizeRecord(item) {
   if (!item || typeof item !== 'object') return null;
-  const get = (...candidates) => {
-    for (const c of candidates) {
-      for (const k of Object.keys(item)) {
-        if (k.toLowerCase() === c.toLowerCase()) return item[k];
-      }
+
+  // Log every unique key set we see (first time only)
+  const keyStr = Object.keys(item).join(', ');
+  if (!normalizeRecord._seenKeys) normalizeRecord._seenKeys = new Set();
+  if (!normalizeRecord._seenKeys.has(keyStr)) {
+    normalizeRecord._seenKeys.add(keyStr);
+    console.log(`[normalize] New key pattern: ${keyStr}`);
+    console.log(`[normalize] Sample: ${JSON.stringify(item).substring(0, 300)}`);
+  }
+
+  const get = (...keys) => {
+    for (const k of keys) {
+      // Exact match
+      if (item[k] !== undefined && item[k] !== null && item[k] !== '') return item[k];
+      // Case-insensitive match
+      const found = Object.keys(item).find(ik => ik.toLowerCase() === k.toLowerCase());
+      if (found && item[found] !== undefined && item[found] !== null && item[found] !== '') return item[found];
     }
     return '';
   };
-  const name = get('name','lifter','lifterName','athlete');
-  const total = parseFloat(get('total')) || 0;
-  const squat = parseFloat(get('squat','sq','best_squat')) || 0;
-  if (!name && !total && !squat) return null;
+
+  const name  = get('lifterName','lifter_name','name','athlete','lifter','Lifter','Name');
+  const total = parseFloat(get('total','Total','total_kg')) || 0;
+  const squat = parseFloat(get('squat','Squat','sq','best_squat','squat_kg')) || 0;
+  const bench = parseFloat(get('bench','Bench','bp','best_bench','bench_kg','benchPress','bench_press')) || 0;
+  const dl    = parseFloat(get('deadlift','Deadlift','dl','best_deadlift','deadlift_kg')) || 0;
+
+  if (!name && !total && !squat && !bench && !dl) return null;
+
   return {
-    division:    get('division','div','age_class','ageClass'),
-    gender:      get('gender','sex'),
-    weightClass: String(get('weightClass','weight_class','wc','bodyweight','bwt')),
+    division:    String(get('division','Division','div','age_class','ageClass','age class','ageDivision')),
+    gender:      String(get('gender','Gender','sex','Sex')),
+    weightClass: String(get('weightClass','weight_class','wc','WeightClass','weight class','bwt','bodyweight','Bodyweight')),
     name:        String(name),
     squat,
-    bench:       parseFloat(get('bench','bp','best_bench')) || 0,
-    deadlift:    parseFloat(get('deadlift','dl','best_deadlift')) || 0,
-    total,
-    date:        get('date','meetDate','meet_date'),
-    meet:        get('meet','meetName','meet_name','competition'),
+    bench,
+    deadlift:    dl,
+    total:       total || (squat + bench + dl) || 0,
+    date:        String(get('date','Date','meetDate','meet_date','dateSet','date_set')),
+    meet:        String(get('meet','Meet','meetName','meet_name','competition','Competition','meetLocation','meet_location')),
   };
 }
 
+// ─── ROUTES ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', cached: !!cachedRecords, recordCount: cachedRecords?.length ?? 0 });
+  res.json({
+    status: 'ok',
+    message: 'USPA Records Proxy — Infoweave API',
+    cached: !!cachedRecords,
+    recordCount: cachedRecords?.length ?? 0,
+    cacheAge: cacheTime ? Math.round((Date.now() - cacheTime) / 1000) + 's' : null,
+  });
 });
 
 app.get('/records', async (req, res) => {
   try {
     if (cachedRecords && cacheTime && (Date.now() - cacheTime) < CACHE_TTL_MS) {
+      console.log(`[cache] Serving ${cachedRecords.length} cached records`);
       return res.json({ records: cachedRecords, cached: true, cacheAge: Math.round((Date.now() - cacheTime) / 1000) + 's' });
     }
-    const records = await scrapeRecords();
+    const records = await fetchRecords();
     if (records.length === 0) {
-      return res.status(503).json({ error: 'No records parsed — check Render logs for [shape] and [full-response] output.' });
+      return res.status(503).json({ error: 'API returned no parseable records — check logs for [parse] and [normalize] output.' });
     }
     cachedRecords = records;
     cacheTime = Date.now();
     res.json({ records, cached: false });
   } catch (err) {
-    console.error('[error]', err);
+    console.error('[error]', err.message);
     if (cachedRecords) return res.json({ records: cachedRecords, cached: true, stale: true });
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/refresh', async (req, res) => {
-  cachedRecords = null; cacheTime = null;
+  cachedRecords = null;
+  cacheTime = null;
   try {
-    const records = await scrapeRecords();
-    cachedRecords = records; cacheTime = Date.now();
+    const records = await fetchRecords();
+    cachedRecords = records;
+    cacheTime = Date.now();
     res.json({ ok: true, recordCount: records.length });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => console.log(`USPA proxy on port ${PORT}`));

@@ -10,9 +10,8 @@ app.use(express.json());
 
 let cachedRecords = null;
 let cacheTime = null;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000;
 
-// Load the inner Firebase app directly — skip the outer USPA page entirely
 const EMBED_URL = 'https://infoweave-13b9d.web.app/embed/4gOIDt1q7qH90ThM7Jm8/re7F1Kzp2tnBQfUAdCDa/YWTgjBEqMLHAx3NjjJKY';
 
 async function scrapeRecords() {
@@ -27,152 +26,187 @@ async function scrapeRecords() {
   try {
     const page = await browser.newPage();
 
-    // Track Firestore responses
-    const firestoreData = [];
+    // Collect ALL network responses (not just Firestore)
+    const allResponses = [];
     page.on('response', async (response) => {
       const url = response.url();
-      if (url.includes('firestore.googleapis.com')) {
-        try {
-          const text = await response.text();
-          if (text.length > 20) {
-            firestoreData.push({ url, text });
-            console.log(`[firestore] ${url.substring(0, 100)}`);
-            console.log(`[firestore] body: ${text.substring(0, 800)}`);
-          }
-        } catch (_) {}
-      }
+      const status = response.status();
+      const ct = response.headers()['content-type'] || '';
+      // Skip fonts, images, css
+      if (url.includes('fonts.g') || url.includes('.woff') || url.includes('.png') || url.includes('.css')) return;
+      try {
+        const text = await response.text();
+        allResponses.push({ url, status, ct, text });
+        console.log(`[net] ${status} ${ct.split(';')[0].padEnd(20)} ${url.substring(0, 100)}`);
+        if (text.length > 10 && text.length < 50000) {
+          console.log(`[net-body] ${text.substring(0, 600)}`);
+        }
+      } catch (_) {}
     });
 
-    console.log('[scrape] Loading embed URL directly...');
-    await page.goto(EMBED_URL, { waitUntil: 'networkidle0', timeout: 60000 });
+    console.log('[scrape] Navigating to embed...');
+    await page.goto(EMBED_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Wait for Firebase to stream data in
-    console.log('[scrape] Waiting for Firestore data...');
+    // Phase 1: wait for initial render
+    console.log('[scrape] Phase 1: waiting 6s for initial render...');
+    await new Promise(r => setTimeout(r, 6000));
+
+    // Log DOM state
+    const dom1 = await page.evaluate(() => ({
+      bodyLen: document.body.innerHTML.length,
+      innerText: document.body.innerText.substring(0, 1000),
+      allClasses: [...new Set([...document.querySelectorAll('[class]')].flatMap(el => [...el.classList]))].join(', '),
+      tableCount: document.querySelectorAll('table').length,
+      divCount: document.querySelectorAll('div').length,
+      clickableText: [...document.querySelectorAll('div, li, button, h2, h3, span')].map(el => el.textContent.trim()).filter(t => t.length > 2 && t.length < 60).slice(0, 40),
+    }));
+    console.log('[dom1] bodyLen:', dom1.bodyLen);
+    console.log('[dom1] innerText:', dom1.innerText);
+    console.log('[dom1] classes:', dom1.allClasses);
+    console.log('[dom1] tables:', dom1.tableCount, 'divs:', dom1.divCount);
+    console.log('[dom1] clickable text items:', JSON.stringify(dom1.clickableText));
+
+    // Phase 2: try clicking everything that looks like a division header
+    console.log('[scrape] Phase 2: clicking division headers...');
+    const clicked = await page.evaluate(() => {
+      const clicked = [];
+      // Click anything with text that looks like a division name
+      document.querySelectorAll('div, li, button, span, h2, h3, p').forEach(el => {
+        const text = el.textContent.trim();
+        if (
+          text.length > 2 && text.length < 80 &&
+          (text.match(/men|women|open|master|junior|teen|sub/i) ||
+           text.match(/^\d+(\.\d+)?\s*(kg|\+)?$/) )
+        ) {
+          try { el.click(); clicked.push(text); } catch (_) {}
+        }
+      });
+      return clicked;
+    });
+    console.log('[scrape] Clicked:', clicked.join(' | '));
+
+    // Phase 3: wait for data to load after clicks
+    console.log('[scrape] Phase 3: waiting 8s for data after clicks...');
     await new Promise(r => setTimeout(r, 8000));
 
-    // Log the full rendered DOM
-    const html = await page.evaluate(() => document.body.innerHTML);
-    console.log('[dom] length:', html.length);
-    console.log('[dom] preview:', html.substring(0, 3000));
+    // Log DOM state again
+    const dom2 = await page.evaluate(() => ({
+      bodyLen: document.body.innerHTML.length,
+      innerText: document.body.innerText.substring(0, 2000),
+      tableCount: document.querySelectorAll('table').length,
+      tableHTML: [...document.querySelectorAll('table')].map(t => t.outerHTML.substring(0, 500)).join('\n---\n'),
+      allText: [...document.querySelectorAll('td, th, [class*="record"], [class*="lift"], [class*="result"]')].map(el => el.textContent.trim()).filter(Boolean).join(' | ').substring(0, 2000),
+    }));
+    console.log('[dom2] bodyLen:', dom2.bodyLen);
+    console.log('[dom2] innerText:', dom2.innerText);
+    console.log('[dom2] tables:', dom2.tableCount);
+    console.log('[dom2] tableHTML:', dom2.tableHTML);
+    console.log('[dom2] record elements text:', dom2.allText);
 
-    // Try to extract records from the rendered DOM
-    let records = await extractFromDOM(page);
-    console.log(`[scrape] DOM extraction: ${records.length} records`);
+    // Phase 4: try clicking MORE specifically - scroll and click each item
+    if (dom2.tableCount === 0) {
+      console.log('[scrape] Phase 4: no tables yet, trying aggressive expand...');
+      await page.evaluate(() => {
+        // Try every single clickable element
+        document.querySelectorAll('*').forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (style.cursor === 'pointer') {
+            try { el.click(); } catch (_) {}
+          }
+        });
+      });
+      await new Promise(r => setTimeout(r, 6000));
 
-    // If DOM extraction fails, try parsing Firestore streaming data
-    if (records.length === 0 && firestoreData.length > 0) {
-      console.log('[scrape] Trying Firestore stream parse...');
-      records = parseFirestoreStream(firestoreData);
-      console.log(`[scrape] Stream parse: ${records.length} records`);
+      const dom3 = await page.evaluate(() => ({
+        bodyLen: document.body.innerHTML.length,
+        innerText: document.body.innerText.substring(0, 3000),
+        tableCount: document.querySelectorAll('table').length,
+        fullHTML: document.body.innerHTML.substring(0, 5000),
+      }));
+      console.log('[dom3] bodyLen:', dom3.bodyLen);
+      console.log('[dom3] innerText:', dom3.innerText);
+      console.log('[dom3] tables:', dom3.tableCount);
+      console.log('[dom3] fullHTML:', dom3.fullHTML);
     }
 
+    // Extract whatever we can find
+    const records = await page.evaluate(() => {
+      const records = [];
+
+      // Tables
+      document.querySelectorAll('table').forEach((table, ti) => {
+        const headerRow = table.querySelector('thead tr, tr:first-child');
+        const headers = headerRow
+          ? [...headerRow.querySelectorAll('th, td')].map(h => h.textContent.trim().toLowerCase().replace(/[\s/]+/g, '_'))
+          : [];
+        console.log(`table[${ti}] headers: ${headers.join(', ')}`);
+
+        const bodyRows = table.querySelectorAll('tbody tr') || table.querySelectorAll('tr:not(:first-child)');
+        bodyRows.forEach(tr => {
+          const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
+          if (cells.length < 2) return;
+          const row = { _source: 'table' };
+          if (headers.length) {
+            headers.forEach((h, i) => { if (cells[i] !== undefined) row[h] = cells[i]; });
+          } else {
+            cells.forEach((c, i) => { row[`col_${i}`] = c; });
+          }
+          records.push(row);
+        });
+      });
+
+      // Fallback: grab all text nodes that look like structured data
+      if (records.length === 0) {
+        document.querySelectorAll('[class]').forEach(el => {
+          const cls = el.className;
+          if (typeof cls === 'string' && (cls.includes('row') || cls.includes('record') || cls.includes('item') || cls.includes('entry') || cls.includes('result'))) {
+            const cells = [...el.querySelectorAll('span, div, td, p')].map(c => c.textContent.trim()).filter(Boolean);
+            if (cells.length >= 3) records.push({ _source: 'div', _class: cls, cells: cells.join(' | ') });
+          }
+        });
+      }
+
+      return records;
+    });
+
+    console.log(`[scrape] Extracted ${records.length} records`);
+    if (records.length > 0) console.log('[scrape] Sample:', JSON.stringify(records[0]));
+
     await page.close();
-    return records;
+    return records.map(normalizeRecord).filter(Boolean);
+
   } finally {
     await browser.close();
   }
 }
 
-async function extractFromDOM(page) {
-  return await page.evaluate(() => {
-    const records = [];
-
-    // Log all text content so we can see what rendered
-    const allText = document.body.innerText;
-    console.log('innerText length:', allText.length);
-
-    // Try standard HTML tables
-    document.querySelectorAll('table').forEach((table, ti) => {
-      const headers = [...table.querySelectorAll('thead th, thead td, tr:first-child th, tr:first-child td')]
-        .map(h => h.textContent.trim().toLowerCase().replace(/\s+/g, '_'));
-      console.log(`table[${ti}] headers:`, headers.join(', '));
-
-      table.querySelectorAll('tbody tr, tr:not(:first-child)').forEach(tr => {
-        const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
-        if (cells.length < 2) return;
-        const row = {};
-        headers.forEach((h, i) => { if (cells[i] !== undefined) row[h] = cells[i]; });
-        if (Object.keys(row).length > 0) records.push(row);
-      });
-    });
-
-    // Try any element with class containing "record" or "row"
-    if (records.length === 0) {
-      const rowEls = document.querySelectorAll('[class*="record"], [class*="row"], [class*="item"], [class*="entry"]');
-      console.log('row-like elements:', rowEls.length);
-      rowEls.forEach(el => {
-        const text = el.textContent.trim();
-        if (text.length > 10 && text.length < 500) {
-          records.push({ raw_text: text });
-        }
-      });
+function normalizeRecord(item) {
+  if (!item || typeof item !== 'object') return null;
+  const get = (...keys) => {
+    for (const k of keys) {
+      const found = Object.keys(item).find(ik => ik.toLowerCase() === k.toLowerCase());
+      if (found && item[found] !== undefined && item[found] !== '') return item[found];
     }
-
-    // Log all class names present to understand the app structure
-    const allClasses = [...new Set([...document.querySelectorAll('[class]')].map(el => el.className).join(' ').split(/\s+/).filter(Boolean))];
-    console.log('all classes:', allClasses.join(', '));
-
-    return records;
-  });
+    return '';
+  };
+  const name  = get('lifterName','lifter_name','name','athlete','lifter');
+  const total = parseFloat(get('total')) || 0;
+  const squat = parseFloat(get('squat','sq','best_squat')) || 0;
+  const bench = parseFloat(get('bench','bp','bench_press')) || 0;
+  const dl    = parseFloat(get('deadlift','dl','best_deadlift')) || 0;
+  if (!name && !total && !squat) return null;
+  return {
+    division:    String(get('division','div','age_class','age_division')),
+    gender:      String(get('gender','sex')),
+    weightClass: String(get('weightClass','weight_class','wc','bodyweight','bwt')),
+    name:        String(name),
+    squat, bench, deadlift: dl,
+    total:       total || squat + bench + dl,
+    date:        String(get('date','meetDate','meet_date','date_set')),
+    meet:        String(get('meet','meetName','meet_name','competition')),
+  };
 }
 
-// Parse Firestore's chunked streaming format
-// Format: <length>\n[[id,[type,...]], ...]
-function parseFirestoreStream(responses) {
-  const records = [];
-  for (const { text } of responses) {
-    // Strip the leading number (byte count)
-    const lines = text.split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      if (!line.startsWith('[') && !line.startsWith('{')) continue;
-      try {
-        const parsed = JSON.parse(line);
-        const found = walkForRecords(parsed);
-        records.push(...found);
-      } catch (_) {}
-    }
-  }
-  return records;
-}
-
-function walkForRecords(obj) {
-  const records = [];
-  if (!obj || typeof obj !== 'object') return records;
-
-  // Check if this looks like a Firestore document with fields
-  if (obj.fields && typeof obj.fields === 'object') {
-    const f = obj.fields;
-    const get = (k) => {
-      const v = f[k];
-      if (!v) return '';
-      return v.stringValue ?? v.integerValue ?? v.doubleValue ?? v.booleanValue ?? '';
-    };
-    console.log('[firestore-doc] fields:', Object.keys(f).join(', '));
-    records.push({
-      division:    get('division') || get('div') || get('age_class') || '',
-      gender:      get('gender') || get('sex') || '',
-      weightClass: get('weightClass') || get('weight_class') || get('wc') || '',
-      name:        get('lifterName') || get('name') || get('lifter') || '',
-      squat:       parseFloat(get('squat') || get('sq') || 0) || 0,
-      bench:       parseFloat(get('bench') || get('bp') || 0) || 0,
-      deadlift:    parseFloat(get('deadlift') || get('dl') || 0) || 0,
-      total:       parseFloat(get('total') || 0) || 0,
-      date:        get('date') || get('meetDate') || '',
-      meet:        get('meet') || get('meetName') || get('competition') || '',
-    });
-    return records;
-  }
-
-  // Recurse into arrays and objects
-  if (Array.isArray(obj)) {
-    obj.forEach(item => records.push(...walkForRecords(item)));
-  } else {
-    Object.values(obj).forEach(val => records.push(...walkForRecords(val)));
-  }
-  return records;
-}
-
-// ─── ROUTES ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ status: 'ok', cached: !!cachedRecords, recordCount: cachedRecords?.length ?? 0 });
 });
@@ -184,7 +218,7 @@ app.get('/records', async (req, res) => {
     }
     const records = await scrapeRecords();
     if (records.length === 0) {
-      return res.status(503).json({ error: 'No records found — check Render logs for [dom] and [firestore] output.' });
+      return res.status(503).json({ error: 'No records parsed — check Render logs.' });
     }
     cachedRecords = records;
     cacheTime = Date.now();

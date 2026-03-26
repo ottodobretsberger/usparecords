@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>USPA Records — IPL World Raw</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0b0d;
+    --surface:  #111318;
+    --card:     #161a22;
+    --border:   #1e2430;
+    --accent:   #e8423a;
+    --accent2:  #ff6b35;
+    --gold:     #f5c842;
+    --text:     #e4e8f0;
+    --muted:    #6b7585;
+    --green:    #3ddc84;
+    --red:      #ff4d4d;
+    --lift-sq:  #4a9eff;
+    --lift-bp:  #a855f7;
+    --lift-dl:  #f59e0b;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10,11,13,0.95);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+  }
+  .header-inner {
+    max-width: 1300px; margin: 0 auto;
+    display: flex; align-items: center; gap: 16px;
+    height: 58px;
+  }
+  .logo-badge {
+    background: var(--accent);
+    color: #fff;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 900; font-size: 18px; letter-spacing: 1px;
+    padding: 4px 10px 3px;
+    clip-path: polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%);
+    flex-shrink: 0;
+  }
+  .header-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700; font-size: 20px; letter-spacing: 0.5px;
+    color: var(--text); flex: 1;
+  }
+  .header-title span { color: var(--muted); font-weight: 400; }
+
+  /* ── STATUS BAR ── */
+  #status-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 20px;
+    font-size: 12px; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); flex-shrink: 0;
+    transition: background .3s;
+  }
+  .status-dot.loading { background: var(--gold); animation: pulse 1s infinite; }
+  .status-dot.ok      { background: var(--green); }
+  .status-dot.error   { background: var(--red); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* ── MAIN LAYOUT ── */
+  .page { max-width: 1300px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* ── PROXY CONFIG ── */
+  .proxy-config {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .proxy-config-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; cursor: pointer; user-select: none;
+    transition: background .15s;
+  }
+  .proxy-config-header:hover { background: rgba(255,255,255,.03); }
+  .proxy-config-header .label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700; font-size: 14px; letter-spacing: .5px;
+    color: var(--muted); flex: 1;
+  }
+  .proxy-config-body { display: none; padding: 0 16px 16px; }
+  .proxy-config-body.open { display: block; }
+  .proxy-url-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .proxy-url-row input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; padding: 8px 12px;
+    font-size: 13px; font-family: monospace;
+  }
+  .proxy-url-row input:focus { outline: none; border-color: var(--accent); }
+  .proxy-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .proxy-hint a { color: var(--accent2); }
+
+  /* ── CONTROLS ── */
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 10px; margin-bottom: 20px; align-items: center;
+  }
+  @media(max-width:700px){ .controls { grid-template-columns: 1fr 1fr; } }
+
+  .search-wrap { position: relative; }
+  .search-wrap svg {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); pointer-events: none;
+  }
+  input[type="text"], select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 9px 12px;
+    font-family: 'Barlow', sans-serif;
+    font-size: 13px; outline: none;
+    transition: border-color .2s; width: 100%;
+  }
+  input[type="text"] { padding-left: 34px; }
+  input[type="text"]:focus, select:focus { border-color: var(--accent); }
+  select option { background: var(--surface); }
+
+  /* ── MY LIFTS PANEL ── */
+  .my-lifts-toggle {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 20px; overflow: hidden;
+  }
+  .my-lifts-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; cursor: pointer; user-select: none;
+    transition: background .15s;
+  }
+  .my-lifts-header:hover { background: rgba(232,66,58,.08); }
+  .my-lifts-header .label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700; font-size: 15px; letter-spacing: .5px;
+    color: var(--accent); flex: 1;
+  }
+  .chevron { transition: transform .25s; color: var(--muted); }
+  .chevron.open { transform: rotate(180deg); }
+  .my-lifts-body {
+    display: none; padding: 0 16px 16px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .my-lifts-body.open { display: grid; }
+  .lift-input-group label {
+    display: block; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .8px; margin-bottom: 5px;
+  }
+  .lift-input-row { display: flex; gap: 6px; }
+  .lift-input-row input {
+    flex: 1; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; font-size: 13px;
+    width: 100%;
+  }
+  .num-input {
+    width: 100%; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; font-size: 13px;
+    font-family: 'Barlow', sans-serif;
+  }
+  .unit-toggle {
+    display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
+  }
+  .unit-toggle button {
+    background: transparent; border: none; color: var(--muted);
+    padding: 0 8px; cursor: pointer; font-size: 11px;
+    font-family: 'Barlow', sans-serif; font-weight: 600;
+    transition: background .15s, color .15s;
+  }
+  .unit-toggle button.active { background: var(--accent); color: #fff; }
+
+  /* ── DIVISIONS ── */
+  .division-block {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 12px; overflow: hidden;
+    transition: border-color .2s;
+  }
+  .division-block:hover { border-color: #2a3142; }
+  .division-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; cursor: pointer; user-select: none;
+    transition: background .15s;
+  }
+  .division-header:hover { background: rgba(255,255,255,.03); }
+  .division-badge {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 900; font-size: 13px; letter-spacing: 1.5px;
+    padding: 3px 9px 2px; border-radius: 3px; text-transform: uppercase;
+  }
+  .badge-men   { background: rgba(74,158,255,.15);  color: #4a9eff; }
+  .badge-women { background: rgba(255,100,200,.15); color: #ff64c8; }
+  .badge-open  { background: rgba(232,66,58,.12);   color: var(--accent); }
+  .badge-sub   { background: rgba(245,200,66,.1);   color: var(--gold); }
+  .badge-mast  { background: rgba(61,220,132,.1);   color: var(--green); }
+  .badge-teen  { background: rgba(168,85,247,.1);   color: #a855f7; }
+  .badge-jr    { background: rgba(255,107,53,.12);  color: var(--accent2); }
+  .division-name {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700; font-size: 17px; flex: 1;
+  }
+  .division-count { font-size: 11px; color: var(--muted); }
+  .div-chevron { color: var(--muted); transition: transform .25s; }
+  .div-chevron.open { transform: rotate(180deg); }
+
+  /* ── TABLE ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    background: var(--surface); padding: 9px 14px; text-align: left;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 600; font-size: 12px; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  thead th:first-child { padding-left: 18px; }
+  tbody tr {
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    transition: background .12s;
+  }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody tr.my-lift-row { background: rgba(232,66,58,.07); }
+  tbody tr.my-lift-row:hover { background: rgba(232,66,58,.12); }
+  td { padding: 10px 14px; white-space: nowrap; }
+  td:first-child { padding-left: 18px; }
+  .wc-cell { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 14px; }
+  .lift-cell { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 15px; }
+  .lift-sq { color: var(--lift-sq); }
+  .lift-bp { color: var(--lift-bp); }
+  .lift-dl { color: var(--lift-dl); }
+  .lift-total { color: var(--text); font-weight: 700; }
+  .name-cell { color: var(--text); }
+  .date-cell { color: var(--muted); font-size: 12px; }
+  .meet-cell { color: var(--muted); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .compare-bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .compare-bar {
+    flex: 1; height: 4px; background: var(--border); border-radius: 2px;
+    overflow: hidden; max-width: 80px;
+  }
+  .compare-bar-fill { height: 100%; border-radius: 2px; background: var(--green); transition: width .4s ease; }
+  .compare-pct { font-size: 11px; color: var(--muted); min-width: 36px; }
+  .compare-pct.over { color: var(--green); }
+  .compare-pct.near { color: var(--gold); }
+  .my-lift-badge {
+    display: inline-block; background: var(--accent); color: #fff;
+    font-size: 9px; font-weight: 700; letter-spacing: .8px;
+    padding: 1px 5px; border-radius: 2px;
+    text-transform: uppercase; vertical-align: middle; margin-left: 6px;
+  }
+
+  /* ── STATES ── */
+  .state-msg { text-align: center; padding: 48px 20px; color: var(--muted); font-size: 14px; }
+  .state-msg .big { font-size: 36px; margin-bottom: 10px; }
+  .spinner {
+    width: 28px; height: 28px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600;
+    font-family: 'Barlow', sans-serif; cursor: pointer;
+    transition: background .15s, transform .1s; white-space: nowrap;
+  }
+  .btn:hover { background: #c93530; }
+  .btn:active { transform: scale(.97); }
+  .btn-ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+  }
+  .btn-ghost:hover { background: var(--surface); color: var(--text); }
+  .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+  /* ── NOTICE ── */
+  .notice {
+    background: rgba(245,200,66,.06); border: 1px solid rgba(245,200,66,.2);
+    border-radius: 8px; padding: 12px 16px; font-size: 12px; color: var(--gold);
+    margin-bottom: 20px; line-height: 1.6;
+  }
+
+  footer {
+    text-align: center; padding: 24px 20px; font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border); max-width: 1300px; margin: 0 auto;
+  }
+  footer a { color: var(--muted); }
+
+  @media(max-width:600px){
+    .division-name { font-size: 14px; }
+    td, th { padding: 8px 10px; }
+    .header-title span { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo-badge">USPA</div>
+    <div class="header-title">
+      IPL World Records <span>— Raw Full Power · Drug Tested</span>
+    </div>
+  </div>
+</header>
+
+<div id="status-bar">
+  <div class="status-dot loading" id="sdot"></div>
+  <span id="status-text">Connecting…</span>
+</div>
+
+<div class="page">
+
+  <!-- PROXY URL CONFIG -->
+  <div class="proxy-config">
+    <div class="proxy-config-header" onclick="toggleProxyConfig()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      <span class="label">⚙ PROXY SERVER URL</span>
+      <svg class="chevron" id="proxy-chev" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="proxy-config-body" id="proxy-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+        Enter the URL of your deployed proxy server. Once set, data loads automatically for everyone.
+      </p>
+      <div class="proxy-url-row">
+        <input type="text" id="proxy-url" placeholder="https://your-proxy.onrender.com" value="">
+        <button class="btn btn-sm" onclick="saveProxyUrl()">Save &amp; Load</button>
+      </div>
+      <p class="proxy-hint">
+        Don't have a proxy yet? Follow the <strong>setup guide</strong> to deploy one free on Render in ~5 minutes.<br>
+        <a href="#" onclick="alert('See the setup-guide.md file included with the download.')">📖 View Setup Guide</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- MY LIFTS -->
+  <div class="my-lifts-toggle">
+    <div class="my-lifts-header" onclick="toggleMyLifts()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2v20M2 12h20"/></svg>
+      <div class="label">⚡ COMPARE MY LIFTS</div>
+      <svg class="chevron" id="lifts-chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="my-lifts-body" id="lifts-body">
+      <div class="lift-input-group">
+        <label>Weight Class</label>
+        <select id="my-wc">
+          <option value="">— select —</option>
+          <option>44</option><option>48</option><option>52</option><option>56</option>
+          <option>60</option><option>67.5</option><option>75</option><option>82.5</option>
+          <option>90</option><option>100</option><option>110</option><option>125</option>
+          <option>140</option><option>140+</option>
+        </select>
+      </div>
+      <div class="lift-input-group">
+        <label>Division</label>
+        <select id="my-div">
+          <option value="">— select —</option>
+          <option>Open</option><option>Submaster</option>
+          <option>Master 1</option><option>Master 2</option>
+          <option>Master 3</option><option>Master 4</option>
+          <option>Junior</option><option>Teen 1</option>
+          <option>Teen 2</option><option>Teen 3</option>
+        </select>
+      </div>
+      <div class="lift-input-group">
+        <label>Squat</label>
+        <div class="lift-input-row">
+          <input type="number" id="my-sq" placeholder="0" min="0" oninput="renderAll()">
+          <div class="unit-toggle">
+            <button id="unit-kg" class="active" onclick="setUnit('kg')">kg</button>
+            <button id="unit-lb" onclick="setUnit('lb')">lb</button>
+          </div>
+        </div>
+      </div>
+      <div class="lift-input-group">
+        <label>Bench</label>
+        <input type="number" id="my-bp" class="num-input" placeholder="0" min="0" oninput="renderAll()">
+      </div>
+      <div class="lift-input-group">
+        <label>Deadlift</label>
+        <input type="number" id="my-dl" class="num-input" placeholder="0" min="0" oninput="renderAll()">
+      </div>
+      <div class="lift-input-group">
+        <label>Total <span style="color:var(--muted);font-size:10px">(auto)</span></label>
+        <input type="number" id="my-total" class="num-input" placeholder="auto-calc" min="0" oninput="renderAll()">
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="controls">
+    <div class="search-wrap">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search" placeholder="Search lifter, meet, location…" oninput="renderAll()">
+    </div>
+    <select id="filter-gender" onchange="renderAll()">
+      <option value="">All Genders</option>
+      <option value="men">Men</option>
+      <option value="women">Women</option>
+    </select>
+    <select id="filter-div" onchange="renderAll()">
+      <option value="">All Divisions</option>
+    </select>
+    <select id="filter-wc" onchange="renderAll()">
+      <option value="">All Weight Classes</option>
+    </select>
+  </div>
+
+  <div id="records-container">
+    <div class="state-msg">
+      <div class="big">🏋️</div>
+      <p>Enter your proxy URL above to load live USPA records.</p>
+      <p style="margin-top:8px;font-size:12px;">See the setup guide to deploy your free proxy server in ~5 minutes.</p>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Data sourced from <a href="https://records.uspa.net" target="_blank">records.uspa.net</a> ·
+  IPL World · Raw Full Power · Drug Tested · Unofficial viewer. All records © USPA.
+</footer>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let allRecords = [];
+let unit = 'kg';
+
+const PROXY_KEY = 'uspa_proxy_url';
+
+// ─── PROXY ───────────────────────────────────────────────────────────────────
+function getProxyUrl() {
+  return localStorage.getItem(PROXY_KEY) || '';
+}
+
+function saveProxyUrl() {
+  const url = document.getElementById('proxy-url').value.trim().replace(/\/$/, '');
+  if (!url) return alert('Please enter a proxy URL.');
+  localStorage.setItem(PROXY_KEY, url);
+  document.getElementById('proxy-body').classList.remove('open');
+  document.getElementById('proxy-chev').classList.remove('open');
+  loadFromProxy(url);
+}
+
+async function loadFromProxy(baseUrl) {
+  setStatus('loading', 'Fetching records from proxy…');
+  document.getElementById('records-container').innerHTML = `
+    <div class="state-msg"><div class="spinner"></div>Loading records…</div>`;
+
+  try {
+    const res = await fetch(`${baseUrl}/records`, { signal: AbortSignal.timeout(30000) });
+    if (!res.ok) throw new Error(`Proxy returned HTTP ${res.status}`);
+    const data = await res.json();
+
+    if (!data.records || data.records.length === 0) {
+      throw new Error('Proxy returned no records. It may still be starting up — try again in 30 seconds.');
+    }
+
+    allRecords = data.records;
+    populateFilters();
+    renderAll();
+
+    const age = data.cacheAge ? ` · cached ${data.cacheAge} ago` : '';
+    const stale = data.stale ? ' · ⚠ stale' : '';
+    setStatus('ok', `${allRecords.length} records loaded${age}${stale}`);
+  } catch (err) {
+    setStatus('error', `Error: ${err.message}`);
+    document.getElementById('records-container').innerHTML = `
+      <div class="state-msg">
+        <div class="big">⚠️</div>
+        <p style="margin-bottom:12px">${escHtml(err.message)}</p>
+        <p style="font-size:12px;color:var(--muted)">
+          Make sure your proxy is running and the URL is correct.<br>
+          Free Render servers sleep after inactivity — first load may take 30–60 seconds.
+        </p>
+        <button class="btn" style="margin-top:16px" onclick="loadFromProxy('${escHtml(getProxyUrl())}')">
+          Retry
+        </button>
+      </div>`;
+  }
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = getProxyUrl();
+  if (saved) {
+    document.getElementById('proxy-url').value = saved;
+    loadFromProxy(saved);
+  } else {
+    setStatus('error', 'No proxy configured — enter your proxy URL above');
+    // Show proxy config open by default
+    document.getElementById('proxy-body').classList.add('open');
+    document.getElementById('proxy-chev').classList.add('open');
+  }
+});
+
+// ─── FILTERS ─────────────────────────────────────────────────────────────────
+function populateFilters() {
+  const divs = [...new Set(allRecords.map(r => r.division).filter(Boolean))].sort();
+  const wcs  = [...new Set(allRecords.map(r => r.weightClass).filter(Boolean))].sort((a, b) => {
+    const n = x => x.toString().includes('+') ? 9999 : parseFloat(x);
+    return n(a) - n(b);
+  });
+  const dSel = document.getElementById('filter-div');
+  const wSel = document.getElementById('filter-wc');
+  dSel.innerHTML = '<option value="">All Divisions</option>';
+  wSel.innerHTML  = '<option value="">All Weight Classes</option>';
+  divs.forEach(d => { dSel.innerHTML += `<option>${escHtml(d)}</option>`; });
+  wcs.forEach(w  => { wSel.innerHTML += `<option>${escHtml(String(w))}</option>`; });
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+function renderAll() {
+  if (!allRecords.length) return;
+
+  const q   = document.getElementById('search').value.toLowerCase();
+  const gF  = document.getElementById('filter-gender').value.toLowerCase();
+  const dF  = document.getElementById('filter-div').value;
+  const wcF = document.getElementById('filter-wc').value;
+  const myWC  = document.getElementById('my-wc').value;
+  const myDiv = document.getElementById('my-div').value;
+  const mySQ  = parseMyLift('my-sq');
+  const myBP  = parseMyLift('my-bp');
+  const myDL  = parseMyLift('my-dl');
+  const manualTotal = parseMyLift('my-total');
+  const myTot = manualTotal || (mySQ + myBP + myDL || 0);
+
+  if (mySQ || myBP || myDL) {
+    const calc = mySQ + myBP + myDL;
+    if (!manualTotal) document.getElementById('my-total').placeholder = calc.toFixed(1);
+  }
+
+  let filtered = allRecords.filter(r => {
+    if (gF && (r.gender || '').toLowerCase() !== gF) return false;
+    if (dF && r.division !== dF) return false;
+    if (wcF && String(r.weightClass) !== wcF) return false;
+    if (q) {
+      const hay = `${r.name} ${r.meet} ${r.location} ${r.division}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const grouped = {};
+  filtered.forEach(r => {
+    const gKey = r.gender || 'Unknown';
+    const dKey = r.division || 'Unknown';
+    if (!grouped[gKey]) grouped[gKey] = {};
+    if (!grouped[gKey][dKey]) grouped[gKey][dKey] = [];
+    grouped[gKey][dKey].push(r);
+  });
+
+  const container = document.getElementById('records-container');
+  if (!filtered.length) {
+    container.innerHTML = `<div class="state-msg"><div class="big">🔍</div>No records match your filters.</div>`;
+    return;
+  }
+
+  const hasMyLifts = mySQ || myBP || myDL || myTot;
+  let html = '';
+
+  ['Men', 'Women'].forEach(g => {
+    if (!grouped[g]) return;
+    Object.keys(grouped[g]).sort().forEach(d => {
+      const rows = grouped[g][d].sort((a, b) => {
+        const n = x => String(x).includes('+') ? 9999 : parseFloat(x);
+        return n(a.weightClass) - n(b.weightClass);
+      });
+      const divId = `div-${g}-${d}`.replace(/[\s.]/g, '_');
+      const badge = divBadge(g, d);
+
+      html += `
+      <div class="division-block" id="${divId}">
+        <div class="division-header" onclick="toggleDiv('${divId}')">
+          <span class="division-badge ${badge.cls}">${badge.short}</span>
+          <span class="division-name">${escHtml(g.toUpperCase())} · ${escHtml(d.toUpperCase())}</span>
+          <span class="division-count">${rows.length} weight class${rows.length !== 1 ? 'es' : ''}</span>
+          <svg class="div-chevron" id="chev-${divId}" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="table-wrap" id="body-${divId}" style="display:none">
+          <table>
+            <thead><tr>
+              <th>WC (kg)</th><th>Lifter</th>
+              <th style="color:var(--lift-sq)">Squat</th>
+              <th style="color:var(--lift-bp)">Bench</th>
+              <th style="color:var(--lift-dl)">Deadlift</th>
+              <th>Total</th><th>Date</th><th>Meet</th>
+              ${hasMyLifts ? '<th>vs Record</th>' : ''}
+            </tr></thead>
+            <tbody>`;
+
+      rows.forEach(r => {
+        const isMyMatch = myWC && myDiv && String(r.weightClass) === myWC && r.division === myDiv && r.gender === g;
+        let myMark = '';
+        let cmpCell = '';
+
+        if (hasMyLifts) {
+          if (isMyMatch && myTot && r.total) {
+            const pct = myTot / r.total * 100;
+            const barW = Math.min(pct, 100).toFixed(1);
+            const cls = pct >= 100 ? 'over' : pct >= 80 ? 'near' : '';
+            myMark = `<span class="my-lift-badge">YOU</span>`;
+            cmpCell = `<td><div class="compare-bar-wrap">
+              <div class="compare-bar"><div class="compare-bar-fill" style="width:${barW}%"></div></div>
+              <span class="compare-pct ${cls}">${pct.toFixed(1)}%</span>
+            </div></td>`;
+          } else {
+            cmpCell = '<td></td>';
+          }
+        }
+
+        html += `<tr class="${isMyMatch ? 'my-lift-row' : ''}">
+          <td class="wc-cell">${escHtml(String(r.weightClass))}</td>
+          <td class="name-cell">${escHtml(r.name || '—')}${myMark}</td>
+          <td class="lift-cell lift-sq">${fmtW(r.squat)}</td>
+          <td class="lift-cell lift-bp">${fmtW(r.bench)}</td>
+          <td class="lift-cell lift-dl">${fmtW(r.deadlift)}</td>
+          <td class="lift-cell lift-total">${fmtW(r.total)}</td>
+          <td class="date-cell">${escHtml(r.date || '—')}</td>
+          <td class="meet-cell" title="${escHtml(r.meet || '')}">${escHtml(r.meet || '—')}</td>
+          ${cmpCell}
+        </tr>`;
+      });
+
+      html += `</tbody></table></div></div>`;
+    });
+  });
+
+  container.innerHTML = html;
+
+  // Auto-expand on match or small result set
+  document.querySelectorAll('.division-block').forEach(b => {
+    const id = b.id;
+    if (filtered.length <= 15 || b.querySelector('.my-lift-row')) {
+      const body = document.getElementById('body-' + id);
+      const chev = document.getElementById('chev-' + id);
+      if (body) body.style.display = 'block';
+      if (chev) chev.classList.add('open');
+    }
+  });
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function parseMyLift(id) {
+  const v = parseFloat(document.getElementById(id).value);
+  if (isNaN(v) || v <= 0) return 0;
+  return unit === 'lb' ? v * 0.453592 : v;
+}
+function fmtW(kg) {
+  if (!kg) return '—';
+  return unit === 'lb' ? (kg * 2.20462).toFixed(1) + ' lb' : kg + ' kg';
+}
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function divBadge(gender, div) {
+  const g = (gender || '').toLowerCase();
+  const d = (div || '').toLowerCase();
+  const gCls = g.includes('women') ? 'badge-women' : 'badge-men';
+  const short = gender === 'Men' ? 'M' : 'W';
+  if (d.includes('open'))     return { cls: `${gCls} badge-open`, short: `${short} OPEN` };
+  if (d.includes('sub'))      return { cls: `${gCls} badge-sub`,  short: `${short} SUB` };
+  if (d.includes('master 1')) return { cls: `${gCls} badge-mast`, short: `${short} M1` };
+  if (d.includes('master 2')) return { cls: `${gCls} badge-mast`, short: `${short} M2` };
+  if (d.includes('master 3')) return { cls: `${gCls} badge-mast`, short: `${short} M3` };
+  if (d.includes('master 4')) return { cls: `${gCls} badge-mast`, short: `${short} M4` };
+  if (d.includes('junior'))   return { cls: `${gCls} badge-jr`,   short: `${short} JR` };
+  if (d.includes('teen 1'))   return { cls: `${gCls} badge-teen`, short: `${short} T1` };
+  if (d.includes('teen 2'))   return { cls: `${gCls} badge-teen`, short: `${short} T2` };
+  if (d.includes('teen 3'))   return { cls: `${gCls} badge-teen`, short: `${short} T3` };
+  return { cls: gCls, short };
+}
+function toggleDiv(id) {
+  const body = document.getElementById('body-' + id);
+  const chev = document.getElementById('chev-' + id);
+  if (!body) return;
+  const open = body.style.display === 'block';
+  body.style.display = open ? 'none' : 'block';
+  if (chev) chev.classList.toggle('open', !open);
+}
+function toggleMyLifts() {
+  document.getElementById('lifts-body').classList.toggle('open');
+  document.getElementById('lifts-chevron').classList.toggle('open');
+}
+function toggleProxyConfig() {
+  document.getElementById('proxy-body').classList.toggle('open');
+  document.getElementById('proxy-chev').classList.toggle('open');
+}
+function setUnit(u) {
+  unit = u;
+  document.getElementById('unit-kg').classList.toggle('active', u === 'kg');
+  document.getElementById('unit-lb').classList.toggle('active', u === 'lb');
+  renderAll();
+}
+function setStatus(state, msg) {
+  document.getElementById('sdot').className = 'status-dot ' + state;
+  document.getElementById('status-text').textContent = msg;
+}
+</script>
+</body>
+</html>

@@ -6,30 +6,17 @@ const chromium = require('@sparticuz/chromium');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Allow requests from any origin (so your HTML page can call this)
 app.use(cors());
 app.use(express.json());
 
-// Cache records in memory so we don't re-scrape on every request
 let cachedRecords = null;
 let cacheTime = null;
-const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
+const CACHE_TTL_MS = 1000 * 60 * 60;
 
-// The USPA embed URLs to scrape — add more as needed
-const EMBED_CONFIGS = [
-  {
-    label: 'IPL World · Raw Full Power · Drug Tested',
-    url: 'https://records.uspa.net/records.php?location=ipl-world&status=drug-tested&event=raw-powerlifting',
-    location: 'ipl-world',
-    status: 'drug-tested',
-    event: 'raw-powerlifting',
-  },
-];
+const TARGET_URL = 'https://records.uspa.net/records.php?location=ipl-world&status=drug-tested&event=raw-powerlifting';
 
-// ─── SCRAPE ──────────────────────────────────────────────────────────────────
 async function scrapeRecords() {
-  console.log('[scrape] Launching browser…');
-
+  console.log('[scrape] Launching browser...');
   const browser = await puppeteer.launch({
     args: chromium.args,
     defaultViewport: chromium.defaultViewport,
@@ -37,245 +24,210 @@ async function scrapeRecords() {
     headless: chromium.headless,
   });
 
-  const allRecords = [];
-
   try {
-    for (const config of EMBED_CONFIGS) {
-      console.log(`[scrape] Loading: ${config.url}`);
-      const page = await browser.newPage();
+    const page = await browser.newPage();
+    const capturedResponses = [];
 
-      // Collect all XHR/fetch responses that look like Firestore data
-      const firestoreResponses = [];
-
-      page.on('response', async (response) => {
-        const url = response.url();
-        if (
-          url.includes('firestore.googleapis.com') ||
-          url.includes('firebase') ||
-          url.includes('embedloader')
-        ) {
-          try {
-            const text = await response.text();
-            firestoreResponses.push({ url, text });
-          } catch (_) {}
-        }
-      });
-
-      // Load the page and wait for the embed to render
-      await page.goto(config.url, { waitUntil: 'networkidle2', timeout: 30000 });
-
-      // Wait a bit for any lazy-loaded content
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Try to expand all division sections (click them)
-      try {
-        const expandables = await page.$$('[class*="division"], [class*="accordion"], [class*="expand"], details');
-        for (const el of expandables) {
-          try { await el.click(); } catch (_) {}
-        }
-        await new Promise(r => setTimeout(r, 1500));
-      } catch (_) {}
-
-      // Extract table data from the rendered DOM
-      const tableRecords = await page.evaluate((cfg) => {
-        const rows = [];
-
-        // Try standard HTML tables first
-        document.querySelectorAll('table').forEach(table => {
-          const headers = [...table.querySelectorAll('thead th, thead td')]
-            .map(h => h.textContent.trim().toLowerCase());
-
-          table.querySelectorAll('tbody tr').forEach(tr => {
-            const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
-            if (cells.length < 3) return;
-
-            const row = {
-              location: cfg.location,
-              status: cfg.status,
-              event: cfg.event,
-            };
-
-            // Map cells to fields using headers if available
-            if (headers.length) {
-              headers.forEach((h, i) => {
-                if (cells[i] !== undefined) row[h] = cells[i];
-              });
-            } else {
-              // Fallback: try to guess by position
-              row.raw = cells;
-            }
-            rows.push(row);
-          });
-        });
-
-        // Also try list/div-based layouts
-        document.querySelectorAll('[class*="record-row"], [class*="recordRow"], [class*="record_row"]').forEach(el => {
-          rows.push({ raw_text: el.textContent.trim(), location: cfg.location, status: cfg.status, event: cfg.event });
-        });
-
-        return rows;
-      }, config);
-
-      console.log(`[scrape] Found ${tableRecords.length} table rows, ${firestoreResponses.length} Firebase responses`);
-
-      // Parse Firebase JSON responses
-      let parsedFromFirebase = false;
-      for (const { url, text } of firestoreResponses) {
+    page.on('response', async (response) => {
+      const url = response.url();
+      const ct = response.headers()['content-type'] || '';
+      if (ct.includes('json') || url.includes('firestore') || url.includes('firebase') || url.includes('googleapis') || url.includes('embedloader')) {
         try {
-          const json = JSON.parse(text);
-          const parsed = parseFirestoreResponse(json, config);
-          if (parsed.length > 0) {
-            allRecords.push(...parsed);
-            parsedFromFirebase = true;
-            console.log(`[scrape] Parsed ${parsed.length} records from Firebase response`);
-          }
-        } catch (_) {}
+          const text = await response.text();
+          capturedResponses.push({ url, status: response.status(), text });
+          console.log(`[net] ${response.status()} ${url.substring(0, 120)}`);
+          console.log(`[net] preview: ${text.substring(0, 600)}`);
+        } catch (e) {
+          console.log(`[net] body read error for ${url}: ${e.message}`);
+        }
       }
+    });
 
-      // Fall back to table data if Firebase parsing didn't work
-      if (!parsedFromFirebase && tableRecords.length > 0) {
-        const normalized = tableRecords.map(r => normalizeTableRow(r, config));
-        allRecords.push(...normalized.filter(Boolean));
-        console.log(`[scrape] Using ${normalized.length} table-scraped records`);
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 45000 });
+    await new Promise(r => setTimeout(r, 5000));
+
+    // Log DOM and iframes
+    const bodyPreview = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    console.log('[dom]', bodyPreview);
+
+    const scripts = await page.evaluate(() =>
+      [...document.querySelectorAll('script[src], iframe[src]')].map(e => e.src || e.getAttribute('src'))
+    );
+    console.log('[scripts/iframes]', JSON.stringify(scripts));
+
+    // Try clicking divs that look like accordion headers
+    try {
+      await page.evaluate(() => {
+        document.querySelectorAll('div, section, li').forEach(el => {
+          if (el.children.length < 5) el.click();
+        });
+      });
+      await new Promise(r => setTimeout(r, 3000));
+    } catch (_) {}
+
+    // Second wave of responses after clicking
+    const bodyAfter = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    console.log('[dom-after-click]', bodyAfter);
+
+    console.log(`[scrape] ${capturedResponses.length} network responses captured`);
+    capturedResponses.forEach(({url, text}) => {
+      console.log(`[full-response] URL: ${url}`);
+      console.log(`[full-response] Body (1200 chars): ${text.substring(0, 1200)}`);
+    });
+
+    const allRecords = [];
+    for (const { url, text } of capturedResponses) {
+      const parsed = tryParseRecords(url, text);
+      if (parsed.length > 0) {
+        console.log(`[parse] ${parsed.length} records from ${url.substring(0, 80)}`);
+        allRecords.push(...parsed);
       }
-
-      await page.close();
     }
+
+    await page.close();
+    console.log(`[scrape] Total: ${allRecords.length}`);
+    return allRecords;
   } finally {
     await browser.close();
   }
-
-  console.log(`[scrape] Total records: ${allRecords.length}`);
-  return allRecords;
 }
 
-// ─── PARSERS ─────────────────────────────────────────────────────────────────
-function parseFirestoreResponse(json, config) {
+function tryParseRecords(url, text) {
+  if (!text || text.length < 10) return [];
+  let json;
+  try { json = JSON.parse(text); } catch (_) { return []; }
+
   const records = [];
 
-  // Handle Firestore REST API response shape
-  const docs = json.documents || (Array.isArray(json) ? json : []);
-  docs.forEach(doc => {
-    const f = doc.fields || doc;
-    const get = (k) => {
-      const v = f[k];
-      if (!v) return '';
-      if (typeof v === 'object') {
-        return v.stringValue ?? v.integerValue ?? v.doubleValue ?? v.booleanValue ?? '';
-      }
-      return v;
-    };
+  // Log full structure for any object
+  if (typeof json === 'object' && !Array.isArray(json)) {
+    console.log(`[shape] keys: ${Object.keys(json).join(', ')}`);
+  }
 
-    records.push({
-      division:    get('division') || get('div') || '',
-      gender:      get('gender') || get('sex') || '',
-      weightClass: get('weightClass') || get('weight_class') || get('wc') || '',
-      name:        get('lifterName') || get('name') || get('lifter') || '',
-      squat:       parseFloat(get('squat') || get('sq') || 0) || 0,
-      bench:       parseFloat(get('bench') || get('bp') || 0) || 0,
-      deadlift:    parseFloat(get('deadlift') || get('dl') || 0) || 0,
-      total:       parseFloat(get('total') || 0) || 0,
-      date:        get('date') || get('meetDate') || '',
-      meet:        get('meet') || get('meetName') || get('competition') || '',
-      location:    config.location,
-      status:      config.status,
-      event:       config.event,
+  // Firestore REST: { documents: [...] }
+  if (json.documents && Array.isArray(json.documents)) {
+    console.log(`[shape] Firestore REST, ${json.documents.length} docs`);
+    json.documents.forEach(doc => {
+      if (doc.fields) {
+        console.log(`[shape] doc fields: ${Object.keys(doc.fields).join(', ')}`);
+        records.push(...firestoreDocToRecord(doc));
+      }
     });
-  });
+    return records;
+  }
+
+  // Firestore runQuery: [{ document: {...} }]
+  if (Array.isArray(json)) {
+    console.log(`[shape] array of ${json.length}, first keys: ${json[0] ? Object.keys(json[0]).join(', ') : 'empty'}`);
+    json.forEach(item => {
+      if (item && item.document && item.document.fields) {
+        console.log(`[shape] runQuery doc fields: ${Object.keys(item.document.fields).join(', ')}`);
+        records.push(...firestoreDocToRecord(item.document));
+      } else if (item && typeof item === 'object') {
+        const r = flexRecord(item);
+        if (r) records.push(r);
+      }
+    });
+    return records;
+  }
+
+  // Any other object — try all array-valued keys
+  if (typeof json === 'object') {
+    for (const key of Object.keys(json)) {
+      if (Array.isArray(json[key]) && json[key].length > 0) {
+        console.log(`[shape] key "${key}" has ${json[key].length} items, first: ${JSON.stringify(json[key][0]).substring(0, 200)}`);
+        json[key].forEach(item => {
+          if (item && item.document) records.push(...firestoreDocToRecord(item.document));
+          else { const r = flexRecord(item); if (r) records.push(r); }
+        });
+      }
+    }
+  }
 
   return records;
 }
 
-function normalizeTableRow(row, config) {
-  if (!row) return null;
+function firestoreDocToRecord(doc) {
+  if (!doc || !doc.fields) return [];
+  const f = doc.fields;
+  const get = (k) => {
+    const v = f[k];
+    if (!v) return '';
+    return v.stringValue ?? v.integerValue ?? v.doubleValue ?? v.booleanValue ?? '';
+  };
+  console.log('[firestore fields]', Object.keys(f).join(', '));
+  return [{
+    division:    get('division') || get('div') || get('age_class') || get('ageClass') || '',
+    gender:      get('gender') || get('sex') || '',
+    weightClass: get('weightClass') || get('weight_class') || get('wc') || get('bodyweight') || '',
+    name:        get('lifterName') || get('name') || get('lifter') || get('athlete') || '',
+    squat:       parseFloat(get('squat') || get('sq') || get('best_squat') || 0) || 0,
+    bench:       parseFloat(get('bench') || get('bp') || get('best_bench') || 0) || 0,
+    deadlift:    parseFloat(get('deadlift') || get('dl') || get('best_deadlift') || 0) || 0,
+    total:       parseFloat(get('total') || 0) || 0,
+    date:        get('date') || get('meetDate') || get('meet_date') || '',
+    meet:        get('meet') || get('meetName') || get('meet_name') || get('competition') || '',
+  }];
+}
 
-  // Try to map common column names
-  const f = (keys) => {
-    for (const k of keys) {
-      if (row[k] !== undefined && row[k] !== '') return row[k];
+function flexRecord(item) {
+  if (!item || typeof item !== 'object') return null;
+  const get = (...candidates) => {
+    for (const c of candidates) {
+      for (const k of Object.keys(item)) {
+        if (k.toLowerCase() === c.toLowerCase()) return item[k];
+      }
     }
     return '';
   };
-
-  const squat    = parseFloat(f(['squat','sq','squat (kg)','squat(kg)'])) || 0;
-  const bench    = parseFloat(f(['bench','bp','bench press','bench (kg)'])) || 0;
-  const deadlift = parseFloat(f(['deadlift','dl','deadlift (kg)'])) || 0;
-  const total    = parseFloat(f(['total','total (kg)'])) || (squat + bench + deadlift);
-
+  const name = get('name','lifter','lifterName','athlete');
+  const total = parseFloat(get('total')) || 0;
+  const squat = parseFloat(get('squat','sq','best_squat')) || 0;
+  if (!name && !total && !squat) return null;
   return {
-    division:    f(['division','div','age division','age class']),
-    gender:      f(['gender','sex','m/f']),
-    weightClass: f(['weight class','weightclass','wc','bwt','body weight','weight']),
-    name:        f(['name','lifter','athlete','lifter name']),
+    division:    get('division','div','age_class','ageClass'),
+    gender:      get('gender','sex'),
+    weightClass: String(get('weightClass','weight_class','wc','bodyweight','bwt')),
+    name:        String(name),
     squat,
-    bench,
-    deadlift,
+    bench:       parseFloat(get('bench','bp','best_bench')) || 0,
+    deadlift:    parseFloat(get('deadlift','dl','best_deadlift')) || 0,
     total,
-    date:        f(['date','meet date','meetdate']),
-    meet:        f(['meet','competition','meet name','meetname','event']),
-    location:    config.location,
-    status:      config.status,
-    event:       config.event,
+    date:        get('date','meetDate','meet_date'),
+    meet:        get('meet','meetName','meet_name','competition'),
   };
 }
 
-// ─── ROUTES ──────────────────────────────────────────────────────────────────
-
-// Health check
 app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'USPA Records Proxy',
-    cached: !!cachedRecords,
-    cacheAge: cacheTime ? Math.round((Date.now() - cacheTime) / 1000) + 's' : null,
-    recordCount: cachedRecords?.length ?? 0,
-  });
+  res.json({ status: 'ok', cached: !!cachedRecords, recordCount: cachedRecords?.length ?? 0 });
 });
 
-// Main records endpoint
 app.get('/records', async (req, res) => {
   try {
-    // Serve from cache if fresh
     if (cachedRecords && cacheTime && (Date.now() - cacheTime) < CACHE_TTL_MS) {
-      console.log(`[cache] Serving ${cachedRecords.length} cached records`);
-      return res.json({ records: cachedRecords, cached: true, cacheAge: Math.round((Date.now() - cacheTime) / 1000) });
+      return res.json({ records: cachedRecords, cached: true, cacheAge: Math.round((Date.now() - cacheTime) / 1000) + 's' });
     }
-
-    // Otherwise scrape fresh
-    console.log('[cache] Cache miss — scraping fresh data…');
     const records = await scrapeRecords();
-
     if (records.length === 0) {
-      return res.status(503).json({ error: 'Scrape returned no records. USPA site may have changed.' });
+      return res.status(503).json({ error: 'No records parsed — check Render logs for [shape] and [full-response] output.' });
     }
-
     cachedRecords = records;
     cacheTime = Date.now();
     res.json({ records, cached: false });
   } catch (err) {
     console.error('[error]', err);
-    // Return cached data even if stale on error
-    if (cachedRecords) {
-      return res.json({ records: cachedRecords, cached: true, stale: true, error: err.message });
-    }
+    if (cachedRecords) return res.json({ records: cachedRecords, cached: true, stale: true });
     res.status(500).json({ error: err.message });
   }
 });
 
-// Force refresh endpoint
 app.post('/refresh', async (req, res) => {
+  cachedRecords = null; cacheTime = null;
   try {
-    cachedRecords = null;
-    cacheTime = null;
     const records = await scrapeRecords();
-    cachedRecords = records;
-    cacheTime = Date.now();
+    cachedRecords = records; cacheTime = Date.now();
     res.json({ ok: true, recordCount: records.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => {
-  console.log(`USPA Records Proxy running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`USPA proxy on port ${PORT}`));

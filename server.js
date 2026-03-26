@@ -26,187 +26,195 @@ async function scrapeRecords() {
   try {
     const page = await browser.newPage();
 
-    // Collect ALL network responses (not just Firestore)
-    const allResponses = [];
-    page.on('response', async (response) => {
-      const url = response.url();
-      const status = response.status();
-      const ct = response.headers()['content-type'] || '';
-      // Skip fonts, images, css
-      if (url.includes('fonts.g') || url.includes('.woff') || url.includes('.png') || url.includes('.css')) return;
-      try {
-        const text = await response.text();
-        allResponses.push({ url, status, ct, text });
-        console.log(`[net] ${status} ${ct.split(';')[0].padEnd(20)} ${url.substring(0, 100)}`);
-        if (text.length > 10 && text.length < 50000) {
-          console.log(`[net-body] ${text.substring(0, 600)}`);
-        }
-      } catch (_) {}
-    });
-
-    console.log('[scrape] Navigating to embed...');
     await page.goto(EMBED_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Phase 1: wait for initial render
-    console.log('[scrape] Phase 1: waiting 6s for initial render...');
+    // Wait for initial render, then click everything to expand all divisions
+    console.log('[scrape] Waiting for initial render...');
     await new Promise(r => setTimeout(r, 6000));
 
-    // Log DOM state
-    const dom1 = await page.evaluate(() => ({
-      bodyLen: document.body.innerHTML.length,
-      innerText: document.body.innerText.substring(0, 1000),
-      allClasses: [...new Set([...document.querySelectorAll('[class]')].flatMap(el => [...el.classList]))].join(', '),
-      tableCount: document.querySelectorAll('table').length,
-      divCount: document.querySelectorAll('div').length,
-      clickableText: [...document.querySelectorAll('div, li, button, h2, h3, span')].map(el => el.textContent.trim()).filter(t => t.length > 2 && t.length < 60).slice(0, 40),
-    }));
-    console.log('[dom1] bodyLen:', dom1.bodyLen);
-    console.log('[dom1] innerText:', dom1.innerText);
-    console.log('[dom1] classes:', dom1.allClasses);
-    console.log('[dom1] tables:', dom1.tableCount, 'divs:', dom1.divCount);
-    console.log('[dom1] clickable text items:', JSON.stringify(dom1.clickableText));
-
-    // Phase 2: try clicking everything that looks like a division header
-    console.log('[scrape] Phase 2: clicking division headers...');
-    const clicked = await page.evaluate(() => {
-      const clicked = [];
-      // Click anything with text that looks like a division name
-      document.querySelectorAll('div, li, button, span, h2, h3, p').forEach(el => {
-        const text = el.textContent.trim();
-        if (
-          text.length > 2 && text.length < 80 &&
-          (text.match(/men|women|open|master|junior|teen|sub/i) ||
-           text.match(/^\d+(\.\d+)?\s*(kg|\+)?$/) )
-        ) {
-          try { el.click(); clicked.push(text); } catch (_) {}
+    // Click all pointer-cursor elements to expand divisions
+    await page.evaluate(() => {
+      document.querySelectorAll('*').forEach(el => {
+        if (window.getComputedStyle(el).cursor === 'pointer') {
+          try { el.click(); } catch (_) {}
         }
       });
-      return clicked;
     });
-    console.log('[scrape] Clicked:', clicked.join(' | '));
 
-    // Phase 3: wait for data to load after clicks
-    console.log('[scrape] Phase 3: waiting 8s for data after clicks...');
+    // Wait for all expanded data to load
+    console.log('[scrape] Waiting for expanded data...');
     await new Promise(r => setTimeout(r, 8000));
 
-    // Log DOM state again
-    const dom2 = await page.evaluate(() => ({
-      bodyLen: document.body.innerHTML.length,
-      innerText: document.body.innerText.substring(0, 2000),
-      tableCount: document.querySelectorAll('table').length,
-      tableHTML: [...document.querySelectorAll('table')].map(t => t.outerHTML.substring(0, 500)).join('\n---\n'),
-      allText: [...document.querySelectorAll('td, th, [class*="record"], [class*="lift"], [class*="result"]')].map(el => el.textContent.trim()).filter(Boolean).join(' | ').substring(0, 2000),
-    }));
-    console.log('[dom2] bodyLen:', dom2.bodyLen);
-    console.log('[dom2] innerText:', dom2.innerText);
-    console.log('[dom2] tables:', dom2.tableCount);
-    console.log('[dom2] tableHTML:', dom2.tableHTML);
-    console.log('[dom2] record elements text:', dom2.allText);
-
-    // Phase 4: try clicking MORE specifically - scroll and click each item
-    if (dom2.tableCount === 0) {
-      console.log('[scrape] Phase 4: no tables yet, trying aggressive expand...');
-      await page.evaluate(() => {
-        // Try every single clickable element
-        document.querySelectorAll('*').forEach(el => {
-          const style = window.getComputedStyle(el);
-          if (style.cursor === 'pointer') {
-            try { el.click(); } catch (_) {}
-          }
-        });
-      });
-      await new Promise(r => setTimeout(r, 6000));
-
-      const dom3 = await page.evaluate(() => ({
-        bodyLen: document.body.innerHTML.length,
-        innerText: document.body.innerText.substring(0, 3000),
-        tableCount: document.querySelectorAll('table').length,
-        fullHTML: document.body.innerHTML.substring(0, 5000),
-      }));
-      console.log('[dom3] bodyLen:', dom3.bodyLen);
-      console.log('[dom3] innerText:', dom3.innerText);
-      console.log('[dom3] tables:', dom3.tableCount);
-      console.log('[dom3] fullHTML:', dom3.fullHTML);
-    }
-
-    // Extract whatever we can find
+    // Parse the hierarchy-horizontal-table structure
     const records = await page.evaluate(() => {
-      const records = [];
+      const results = [];
 
-      // Tables
-      document.querySelectorAll('table').forEach((table, ti) => {
-        const headerRow = table.querySelector('thead tr, tr:first-child');
-        const headers = headerRow
-          ? [...headerRow.querySelectorAll('th, td')].map(h => h.textContent.trim().toLowerCase().replace(/[\s/]+/g, '_'))
-          : [];
-        console.log(`table[${ti}] headers: ${headers.join(', ')}`);
+      // The page structure:
+      // .hierarchy-depth-0  = Gender (Men / Women)
+      // .hierarchy-depth-1  = Division (Open, Master 1, etc.) + Weight Class label
+      // .hierarchy-horizontal-table = one row per weight class
+      //   each <td> = one lift type (Squat, Bench, Deadlift, Total)
+      //   inside each td: name (bold), lift type - date, weight kgs/lbs
 
-        const bodyRows = table.querySelectorAll('tbody tr') || table.querySelectorAll('tr:not(:first-child)');
-        bodyRows.forEach(tr => {
-          const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
-          if (cells.length < 2) return;
-          const row = { _source: 'table' };
-          if (headers.length) {
-            headers.forEach((h, i) => { if (cells[i] !== undefined) row[h] = cells[i]; });
-          } else {
-            cells.forEach((c, i) => { row[`col_${i}`] = c; });
+      // Walk up from each table to find its division/gender context
+      document.querySelectorAll('table.hierarchy-horizontal-table').forEach(table => {
+        // Find the nearest ancestor context labels
+        let gender = '';
+        let division = '';
+        let weightClass = '';
+
+        // Walk up the DOM to find hierarchy labels
+        let el = table.parentElement;
+        const contextTexts = [];
+        while (el && el !== document.body) {
+          // Look for sibling text nodes / header elements before this table
+          const prev = el.previousElementSibling;
+          if (prev) {
+            const txt = prev.textContent.trim();
+            if (txt) contextTexts.unshift(txt);
           }
-          records.push(row);
+          el = el.parentElement;
+        }
+
+        // Also look for preceding text in the same container
+        const container = table.closest('[class*="hierarchy"]') || table.parentElement;
+        if (container) {
+          // Walk all preceding siblings
+          let sib = container.previousElementSibling;
+          while (sib) {
+            const txt = sib.textContent.trim();
+            if (txt && txt.length < 100) contextTexts.unshift(txt);
+            sib = sib.previousElementSibling;
+          }
+        }
+
+        // Find gender and division from page section headers
+        // Strategy: find the closest .hierarchy-depth-0 and .hierarchy-depth-1 ancestors
+        const depth0 = table.closest('[class]') 
+          ? (() => {
+              let p = table.parentElement;
+              while (p && p !== document.body) {
+                // Look for depth-0 siblings/ancestors with gender text
+                const allDepth0 = document.querySelectorAll('[class*="depth-0"], [class*="depth0"]');
+                for (const d0 of allDepth0) {
+                  if (d0.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                    const t = d0.textContent.trim();
+                    if (t.match(/men|women/i)) gender = t;
+                  }
+                }
+                p = p.parentElement;
+              }
+            })()
+          : null;
+
+        // Simpler approach: scan all text visible above the table in DOM order
+        const allElements = [...document.querySelectorAll('*')];
+        const tableIdx = allElements.indexOf(table);
+        
+        for (let i = Math.max(0, tableIdx - 200); i < tableIdx; i++) {
+          const el = allElements[i];
+          const cls = el.className || '';
+          const txt = el.textContent.trim();
+          if (!txt || txt.length > 80 || el.children.length > 2) continue;
+          
+          if (typeof cls === 'string') {
+            if (cls.includes('depth-0') || cls.includes('gender')) {
+              if (txt.match(/^(men|women)$/i)) gender = txt;
+            }
+            if (cls.includes('depth-1') || cls.includes('division')) {
+              if (txt.match(/open|master|junior|teen|submaster/i)) division = txt;
+              if (txt.match(/^\d+(\.\d+)?(\+)?(\s*kg)?$/i)) weightClass = txt.replace(/\s*kg/i,'').trim();
+            }
+          }
+          
+          // Fallback pattern matching
+          if (!gender && txt.match(/^(men|women)$/i)) gender = txt;
+          if (!division && txt.match(/^(open|submaster|master \d|junior|teen \d)$/i)) division = txt;
+          if (!weightClass && txt.match(/^\d+(\.\d+)?\+?$/)) weightClass = txt;
+        }
+
+        // Now parse each <td> in the table — each td = one lift record
+        // Structure: [bold name] [lift type - date] [X.XX kgs / Y.YY lbs]
+        const liftMap = {}; // { Squat: {name, weight, date}, Bench: {...}, ... }
+
+        table.querySelectorAll('td').forEach(td => {
+          const depth2 = td.querySelector('.hierarchy-depth-2');
+          if (!depth2) return;
+          const divs = [...depth2.querySelectorAll('div')].filter(d => d.children.length === 0 || d.querySelectorAll('a').length > 0);
+          
+          // Get all text nodes in order
+          const texts = [];
+          depth2.querySelectorAll('div, a').forEach(node => {
+            const t = node.textContent.trim();
+            if (t && t !== 'certificate' && node.children.length === 0) texts.push(t);
+          });
+
+          if (texts.length < 2) return;
+
+          // texts[0] = name (bold/Record Preset label or lifter name)
+          // texts[1] = "LiftType - Date" e.g. "Squat - 2025-07-07"
+          // texts[2] = "142.50 kgs / 314.16 lbs"
+          
+          // Skip "Record Preset" placeholder entries with no real data
+          const nameText = texts[0];
+          const liftDateText = texts[1] || '';
+          const weightText = texts[2] || '';
+
+          if (!liftDateText.match(/squat|bench|deadlift|total/i)) return;
+
+          const liftMatch = liftDateText.match(/^(squat|bench|deadlift|total)\s*[-–]\s*(.+)$/i);
+          if (!liftMatch) return;
+
+          const liftType = liftMatch[1].toLowerCase();
+          const date = liftMatch[2].trim();
+
+          // Parse kg value
+          const kgMatch = weightText.match(/([\d.]+)\s*kgs?/i);
+          const kg = kgMatch ? parseFloat(kgMatch[1]) : 0;
+
+          if (kg > 0) {
+            liftMap[liftType] = { name: nameText, date, kg };
+          }
         });
+
+        // Build a record from liftMap
+        if (Object.keys(liftMap).length > 0) {
+          results.push({
+            gender: gender || 'Unknown',
+            division: division || 'Unknown',
+            weightClass: weightClass || 'Unknown',
+            name_squat:    liftMap.squat?.name    || '',
+            squat:         liftMap.squat?.kg       || 0,
+            date_squat:    liftMap.squat?.date     || '',
+            name_bench:    liftMap.bench?.name     || '',
+            bench:         liftMap.bench?.kg       || 0,
+            date_bench:    liftMap.bench?.date     || '',
+            name_deadlift: liftMap.deadlift?.name  || '',
+            deadlift:      liftMap.deadlift?.kg    || 0,
+            date_deadlift: liftMap.deadlift?.date  || '',
+            name_total:    liftMap.total?.name     || '',
+            total:         liftMap.total?.kg       || 0,
+            date_total:    liftMap.total?.date     || '',
+          });
+        }
       });
 
-      // Fallback: grab all text nodes that look like structured data
-      if (records.length === 0) {
-        document.querySelectorAll('[class]').forEach(el => {
-          const cls = el.className;
-          if (typeof cls === 'string' && (cls.includes('row') || cls.includes('record') || cls.includes('item') || cls.includes('entry') || cls.includes('result'))) {
-            const cells = [...el.querySelectorAll('span, div, td, p')].map(c => c.textContent.trim()).filter(Boolean);
-            if (cells.length >= 3) records.push({ _source: 'div', _class: cls, cells: cells.join(' | ') });
-          }
-        });
-      }
-
-      return records;
+      return results;
     });
 
-    console.log(`[scrape] Extracted ${records.length} records`);
+    console.log(`[scrape] Parsed ${records.length} weight-class records`);
     if (records.length > 0) console.log('[scrape] Sample:', JSON.stringify(records[0]));
+    if (records.length > 1) console.log('[scrape] Sample2:', JSON.stringify(records[1]));
 
     await page.close();
-    return records.map(normalizeRecord).filter(Boolean);
+    return records;
 
   } finally {
     await browser.close();
   }
 }
 
-function normalizeRecord(item) {
-  if (!item || typeof item !== 'object') return null;
-  const get = (...keys) => {
-    for (const k of keys) {
-      const found = Object.keys(item).find(ik => ik.toLowerCase() === k.toLowerCase());
-      if (found && item[found] !== undefined && item[found] !== '') return item[found];
-    }
-    return '';
-  };
-  const name  = get('lifterName','lifter_name','name','athlete','lifter');
-  const total = parseFloat(get('total')) || 0;
-  const squat = parseFloat(get('squat','sq','best_squat')) || 0;
-  const bench = parseFloat(get('bench','bp','bench_press')) || 0;
-  const dl    = parseFloat(get('deadlift','dl','best_deadlift')) || 0;
-  if (!name && !total && !squat) return null;
-  return {
-    division:    String(get('division','div','age_class','age_division')),
-    gender:      String(get('gender','sex')),
-    weightClass: String(get('weightClass','weight_class','wc','bodyweight','bwt')),
-    name:        String(name),
-    squat, bench, deadlift: dl,
-    total:       total || squat + bench + dl,
-    date:        String(get('date','meetDate','meet_date','date_set')),
-    meet:        String(get('meet','meetName','meet_name','competition')),
-  };
-}
-
+// ─── ROUTES ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ status: 'ok', cached: !!cachedRecords, recordCount: cachedRecords?.length ?? 0 });
 });

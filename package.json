@@ -1,7 +1,7 @@
 {
   "name": "uspa-records-proxy",
-  "version": "2.0.0",
-  "description": "Proxy server for USPA records via Infoweave API",
+  "version": "3.0.0",
+  "description": "Proxy server for USPA records",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,8 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "node-fetch": "^2.7.0"
+    "puppeteer-core": "^21.0.0",
+    "@sparticuz/chromium": "^119.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

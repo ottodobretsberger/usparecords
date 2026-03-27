@@ -362,28 +362,6 @@
 
 <div class="page">
 
-  <!-- PROXY URL CONFIG -->
-  <div class="proxy-config">
-    <div class="proxy-config-header" onclick="toggleProxyConfig()">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
-      <span class="label">⚙ PROXY SERVER URL</span>
-      <svg class="chevron" id="proxy-chev" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-    </div>
-    <div class="proxy-config-body" id="proxy-body">
-      <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-        Enter the URL of your deployed proxy server. Once set, data loads automatically for everyone.
-      </p>
-      <div class="proxy-url-row">
-        <input type="text" id="proxy-url" placeholder="https://your-proxy.onrender.com" value="">
-        <button class="btn btn-sm" onclick="saveProxyUrl()">Save &amp; Load</button>
-      </div>
-      <p class="proxy-hint">
-        Don't have a proxy yet? Follow the <strong>setup guide</strong> to deploy one free on Render in ~5 minutes.<br>
-        <a href="#" onclick="alert('See the setup-guide.md file included with the download.')">📖 View Setup Guide</a>
-      </p>
-    </div>
-  </div>
-
   <!-- MY LIFTS -->
   <div class="my-lifts-toggle">
     <div class="my-lifts-header" onclick="toggleMyLifts()">
@@ -480,21 +458,10 @@
 let allRecords = [];
 let unit = 'kg';
 
-const PROXY_KEY = 'uspa_proxy_url';
+const PROXY_URL = 'https://usparecords.onrender.com';
 
 // ─── PROXY ───────────────────────────────────────────────────────────────────
-function getProxyUrl() {
-  return localStorage.getItem(PROXY_KEY) || '';
-}
 
-function saveProxyUrl() {
-  const url = document.getElementById('proxy-url').value.trim().replace(/\/$/, '');
-  if (!url) return alert('Please enter a proxy URL.');
-  localStorage.setItem(PROXY_KEY, url);
-  document.getElementById('proxy-body').classList.remove('open');
-  document.getElementById('proxy-chev').classList.remove('open');
-  loadFromProxy(url);
-}
 
 async function loadFromProxy(baseUrl) {
   setStatus('loading', 'Fetching records from proxy…');
@@ -540,7 +507,7 @@ async function loadFromProxy(baseUrl) {
           Make sure your proxy is running and the URL is correct.<br>
           Free Render servers sleep after inactivity — first load may take 30–60 seconds.
         </p>
-        <button class="btn" style="margin-top:16px" onclick="loadFromProxy('${escHtml(getProxyUrl())}')">
+        <button class="btn" style="margin-top:16px" onclick="loadFromProxy(PROXY_URL)">
           Retry
         </button>
       </div>`;
@@ -549,16 +516,7 @@ async function loadFromProxy(baseUrl) {
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
-  const saved = getProxyUrl();
-  if (saved) {
-    document.getElementById('proxy-url').value = saved;
-    loadFromProxy(saved);
-  } else {
-    setStatus('error', 'No proxy configured — enter your proxy URL above');
-    // Show proxy config open by default
-    document.getElementById('proxy-body').classList.add('open');
-    document.getElementById('proxy-chev').classList.add('open');
-  }
+  loadFromProxy(PROXY_URL);
 });
 
 // ─── FILTERS ─────────────────────────────────────────────────────────────────
@@ -900,10 +858,7 @@ function toggleMyLifts() {
   document.getElementById('lifts-body').classList.toggle('open');
   document.getElementById('lifts-chevron').classList.toggle('open');
 }
-function toggleProxyConfig() {
-  document.getElementById('proxy-body').classList.toggle('open');
-  document.getElementById('proxy-chev').classList.toggle('open');
-}
+
 function setUnit(u) {
   unit = u;
   document.getElementById('unit-kg').classList.toggle('active', u === 'kg');

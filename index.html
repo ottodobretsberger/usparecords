@@ -8,15 +8,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:       #0a0b0d;
-    --surface:  #111318;
-    --card:     #161a22;
-    --border:   #1e2430;
+    --bg:       #14171f;
+    --surface:  #1c2030;
+    --card:     #1e2436;
+    --border:   #2a3248;
     --accent:   #e8423a;
     --accent2:  #ff6b35;
     --gold:     #f5c842;
-    --text:     #e4e8f0;
-    --muted:    #6b7585;
+    --text:     #edf1f8;
+    --muted:    #8494aa;
     --green:    #3ddc84;
     --red:      #ff4d4d;
     --lift-sq:  #4a9eff;
@@ -37,7 +37,7 @@
   /* ── HEADER ── */
   header {
     position: sticky; top: 0; z-index: 100;
-    background: rgba(10,11,13,0.95);
+    background: rgba(20,23,31,0.96);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
     padding: 0 20px;
@@ -342,6 +342,44 @@
     td, th { padding: 8px 10px; }
     .header-title span { display: none; }
   }
+
+  /* ── MOBILE BANNER FIXES ── */
+  @media(max-width:700px){
+    /* Compare banner: stack rows vertically instead of fixed grid */
+    #compare-result [style*="display:grid"] {
+      display: flex !important;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    #compare-result [style*="grid-template-columns"] {
+      display: flex !important;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    /* Lift label + bar row */
+    #compare-result div[style*="display:grid"][style*="70px"] {
+      display: flex !important;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    /* Hide the column headers row on mobile */
+    #compare-result > div:nth-child(2) { display: none !important; }
+    /* Mini bars in table — constrain width */
+    .my-lift-bars { max-width: 100px; }
+  }
+
+  /* Mini compare bars in table cells — prevent overflow */
+  td [style*="display:flex"][style*="align-items:center"] {
+    max-width: 110px;
+    overflow: hidden;
+  }
+  td [style*="width:52px"] {
+    flex-shrink: 0;
+    min-width: 0;
+  }
 </style>
 </head>
 <body>
@@ -391,14 +429,15 @@
         </select>
       </div>
       <div class="lift-input-group">
-        <label>Squat</label>
-        <div class="lift-input-row">
-          <input type="number" id="my-sq" placeholder="0" min="0" oninput="renderAll()">
-          <div class="unit-toggle">
-            <button id="unit-kg" class="active" onclick="setUnit('kg')">kg</button>
-            <button id="unit-lb" onclick="setUnit('lb')">lb</button>
-          </div>
+        <label>Units</label>
+        <div class="unit-toggle" style="width:100%;">
+          <button id="unit-kg" class="active" onclick="setUnit('kg')" style="flex:1;padding:8px 0;">kg</button>
+          <button id="unit-lb" onclick="setUnit('lb')" style="flex:1;padding:8px 0;">lb</button>
         </div>
+      </div>
+      <div class="lift-input-group">
+        <label>Squat</label>
+        <input type="number" id="my-sq" class="num-input" placeholder="0" min="0" oninput="renderAll()">
       </div>
       <div class="lift-input-group">
         <label>Bench</label>
@@ -416,7 +455,7 @@
   </div>
 
   <!-- COMPARE RESULT BANNER -->
-  <div id="compare-result" style="display:none; margin-bottom:16px; padding:14px 18px; background:rgba(232,66,58,.1); border:1px solid rgba(232,66,58,.35); border-radius:10px; font-size:13px; line-height:1.7;">
+  <div id="compare-result" style="display:none; margin-bottom:16px; padding:14px 18px; background:rgba(232,66,58,.1); border:1px solid rgba(232,66,58,.35); border-radius:10px; font-size:13px; line-height:1.7; overflow:hidden; max-width:100%;">
   </div>
 
   <!-- CONTROLS -->
@@ -755,9 +794,9 @@ function renderAll() {
           ? `<span style="color:var(--green)">+${d.toFixed(1)} kg 🏆</span>`
           : `<span style="color:var(--muted)">${d.toFixed(1)} kg</span>`;
         return `
-          <div style="display:grid;grid-template-columns:70px 1fr 80px 120px 90px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="display:grid;grid-template-columns:60px minmax(60px,1fr) 70px minmax(80px,140px) 80px;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);min-width:0;overflow:hidden">
             <span style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;color:${color}">${label}</span>
-            <div style="background:var(--border);border-radius:3px;height:6px;overflow:hidden">
+            <div style="background:var(--border);border-radius:3px;height:6px;overflow:hidden;min-width:0">
               <div style="width:${barW}%;height:100%;background:${barColor};border-radius:3px;transition:width .4s"></div>
             </div>
             <span style="font-size:13px;font-weight:600">${mine.toFixed(1)}<span style="color:var(--muted);font-size:10px"> kg</span></span>
@@ -773,7 +812,7 @@ function renderAll() {
           </strong>
           <span style="color:var(--muted);font-size:11px;margin-left:10px">vs IPL World Record</span>
         </div>
-        <div style="display:grid;grid-template-columns:70px 1fr 80px 120px 90px;gap:10px;padding:4px 0;margin-bottom:2px">
+        <div style="display:grid;grid-template-columns:60px minmax(60px,1fr) 70px minmax(80px,140px) 80px;gap:8px;padding:4px 0;margin-bottom:2px">
           <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Lift</span>
           <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">% of record</span>
           <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Yours</span>

@@ -393,14 +393,22 @@
     </div>
     <div class="my-lifts-body" id="lifts-body">
       <div class="lift-input-group">
-        <label>Weight Class</label>
-        <select id="my-wc" onchange="renderAll()">
+        <label>Gender</label>
+        <select id="my-gender" onchange="populateFilters(); renderAll();">
           <option value="">— select —</option>
+          <option value="Men">Men</option>
+          <option value="Women">Women</option>
         </select>
       </div>
       <div class="lift-input-group">
         <label>Division</label>
         <select id="my-div" onchange="renderAll()">
+          <option value="">— select —</option>
+        </select>
+      </div>
+      <div class="lift-input-group">
+        <label>Weight Class</label>
+        <select id="my-wc" onchange="renderAll()">
           <option value="">— select —</option>
         </select>
       </div>
@@ -600,8 +608,16 @@ function populateFilters() {
   const savedWc  = myWcSel.value;
   myDivSel.innerHTML = '<option value="">— select —</option>';
   myWcSel.innerHTML  = '<option value="">— select —</option>';
-  divs.forEach(d => { myDivSel.innerHTML += `<option ${d===savedDiv?'selected':''}>${escHtml(d)}</option>`; });
-  wcs.forEach(w  => { myWcSel.innerHTML  += `<option ${String(w)===savedWc?'selected':''}>${escHtml(String(w))}</option>`; });
+  const myGenderVal = document.getElementById('my-gender')?.value || '';
+  // Show all divisions (they exist in both genders)
+  divs.forEach(d => { myDivSel.innerHTML += `<option value="${escHtml(d)}" ${d===savedDiv?'selected':''}>${escHtml(d)}</option>`; });
+  // Filter weight classes by selected gender if possible
+  const wcForGender = myGenderVal
+    ? [...new Set(allRecords.filter(r => r.gender === myGenderVal).map(r => r.weightClass).filter(Boolean))].sort((a,b) => {
+        const n = x => x.toString().includes('+') ? 9999 : parseFloat(x); return n(a)-n(b);
+      })
+    : wcs;
+  wcForGender.forEach(w => { myWcSel.innerHTML += `<option value="${escHtml(String(w))}" ${String(w)===savedWc?'selected':''}>${escHtml(String(w))}</option>`; });
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
@@ -612,6 +628,7 @@ function renderAll() {
   const gF  = document.getElementById('filter-gender').value; // 'Men', 'Women', or ''
   const dF  = document.getElementById('filter-div').value;
   const wcF = document.getElementById('filter-wc').value;
+  const myGender = document.getElementById('my-gender').value; // 'Men', 'Women', or ''
   const myWC  = document.getElementById('my-wc').value;
   const myDiv = document.getElementById('my-div').value;
   const mySQ  = parseMyLift('my-sq');
@@ -697,7 +714,7 @@ function renderAll() {
             <tbody>`;
 
       rows.forEach(r => {
-        const isMyMatch = myWC && myDiv && String(r.weightClass) === myWC && r.division === myDiv && r.gender === g;
+        const isMyMatch = myWC && myDiv && myGender && String(r.weightClass) === myWC && r.division === myDiv && r.gender === myGender && r.gender === g;
         let cmpCell = '';
 
         if (hasMyLifts) {
@@ -755,7 +772,7 @@ function renderAll() {
   const banner = document.getElementById('compare-result');
   if (hasMyLifts && myWC && myDiv) {
     // Find the matching record
-    const match = filtered.find(r => String(r.weightClass) === myWC && r.division === myDiv);
+    const match = filtered.find(r => String(r.weightClass) === myWC && r.division === myDiv && (!myGender || r.gender === myGender));
     if (match) {
       const pct = myTot && match.total ? (myTot / match.total * 100) : 0;
       const diff = myTot && match.total ? (myTot - match.total) : 0;
@@ -814,7 +831,11 @@ function renderAll() {
     }
   } else if (hasMyLifts) {
     banner.style.display = 'block';
-    banner.innerHTML = `<span style="color:var(--muted)">⚡ Select your <strong>Weight Class</strong> and <strong>Division</strong> in the Compare panel above to see how you stack up.</span>`;
+    const missing = [];
+    if (!myGender) missing.push('Gender');
+    if (!myDiv)    missing.push('Division');
+    if (!myWC)     missing.push('Weight Class');
+    banner.innerHTML = `<span style="color:var(--muted)">⚡ Also select your <strong>${missing.join(', ')}</strong> above to compare against the record.</span>`;
   } else {
     banner.style.display = 'none';
   }

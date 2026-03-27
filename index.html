@@ -194,6 +194,26 @@
   }
   .unit-toggle button.active { background: var(--accent); color: #fff; }
 
+
+  /* ── SUB CELLS (lifter + date under each lift) ── */
+  .sub-cell { min-width: 130px; }
+  .sub-name {
+    display: block;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+  .sub-date {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 1px;
+  }
+
   /* ── DIVISIONS ── */
   .division-block {
     background: var(--card); border: 1px solid var(--border);
@@ -238,6 +258,12 @@
     border-bottom: 1px solid var(--border); white-space: nowrap;
   }
   thead th:first-child { padding-left: 18px; }
+  thead th.sub-header {
+    font-weight: 400;
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
   tbody tr {
     border-bottom: 1px solid rgba(255,255,255,.04);
     transition: background .12s;
@@ -368,23 +394,14 @@
     <div class="my-lifts-body" id="lifts-body">
       <div class="lift-input-group">
         <label>Weight Class</label>
-        <select id="my-wc">
+        <select id="my-wc" onchange="renderAll()">
           <option value="">— select —</option>
-          <option>44</option><option>48</option><option>52</option><option>56</option>
-          <option>60</option><option>67.5</option><option>75</option><option>82.5</option>
-          <option>90</option><option>100</option><option>110</option><option>125</option>
-          <option>140</option><option>140+</option>
         </select>
       </div>
       <div class="lift-input-group">
         <label>Division</label>
-        <select id="my-div">
+        <select id="my-div" onchange="renderAll()">
           <option value="">— select —</option>
-          <option>Open</option><option>Submaster</option>
-          <option>Master 1</option><option>Master 2</option>
-          <option>Master 3</option><option>Master 4</option>
-          <option>Junior</option><option>Teen 1</option>
-          <option>Teen 2</option><option>Teen 3</option>
         </select>
       </div>
       <div class="lift-input-group">
@@ -412,16 +429,20 @@
     </div>
   </div>
 
+  <!-- COMPARE RESULT BANNER -->
+  <div id="compare-result" style="display:none; margin-bottom:16px; padding:14px 18px; background:rgba(232,66,58,.1); border:1px solid rgba(232,66,58,.35); border-radius:10px; font-size:13px; line-height:1.7;">
+  </div>
+
   <!-- CONTROLS -->
   <div class="controls">
     <div class="search-wrap">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="search" placeholder="Search lifter, meet, location…" oninput="renderAll()">
+      <input type="text" id="search" placeholder="Search lifter name, weight class…" oninput="renderAll()">
     </div>
     <select id="filter-gender" onchange="renderAll()">
       <option value="">All Genders</option>
-      <option value="men">Men</option>
-      <option value="women">Women</option>
+      <option value="Men">Men</option>
+      <option value="Women">Women</option>
     </select>
     <select id="filter-div" onchange="renderAll()">
       <option value="">All Divisions</option>
@@ -481,7 +502,20 @@ async function loadFromProxy(baseUrl) {
       throw new Error('Proxy returned no records. It may still be starting up — try again in 30 seconds.');
     }
 
-    allRecords = data.records;
+    allRecords = data.records.map(r => ({
+      ...r,
+      // Normalize gender to exactly 'Men' or 'Women'
+      gender: (r.gender||'').trim() === 'Men' ? 'Men'
+            : (r.gender||'').trim() === 'Women' ? 'Women'
+            : (r.gender||'').toLowerCase().includes('women') ? 'Women' : 'Men',
+      // Normalize division — trim whitespace, fix known variants
+      division: normalizeDivision(r.division),
+      // Normalize weightClass — strip any trailing non-numeric except +
+      weightClass: String(r.weightClass||'').trim(),
+    }));
+    console.log('[debug] sample record:', JSON.stringify(allRecords[0]));
+    console.log('[debug] unique genders:', [...new Set(allRecords.map(r=>r.gender))]);
+    console.log('[debug] unique divisions:', [...new Set(allRecords.map(r=>r.division))]);
     populateFilters();
     renderAll();
 
@@ -520,18 +554,54 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // ─── FILTERS ─────────────────────────────────────────────────────────────────
+function normalizeDivision(d) {
+  if (!d) return 'Unknown';
+  const s = d.trim();
+  // Map common variants
+  const map = {
+    'open': 'Open',
+    'submaster': 'Submaster', 'sub master': 'Submaster', 'sub-master': 'Submaster',
+    'junior': 'Junior',
+    'teen 1': 'Teen 1', 'teen1': 'Teen 1', 'teenager 1': 'Teen 1',
+    'teen 2': 'Teen 2', 'teen2': 'Teen 2',
+    'teen 3': 'Teen 3', 'teen3': 'Teen 3',
+    'master 1': 'Master 1', 'master1': 'Master 1', 'masters 1': 'Master 1',
+    'master 2': 'Master 2', 'master2': 'Master 2', 'masters 2': 'Master 2',
+    'master 3': 'Master 3', 'master3': 'Master 3', 'masters 3': 'Master 3',
+    'master 4': 'Master 4', 'master4': 'Master 4', 'masters 4': 'Master 4',
+  };
+  return map[s.toLowerCase()] || s;
+}
+
 function populateFilters() {
-  const divs = [...new Set(allRecords.map(r => r.division).filter(Boolean))].sort();
-  const wcs  = [...new Set(allRecords.map(r => r.weightClass).filter(Boolean))].sort((a, b) => {
+  const divOrder = ['Open','Submaster','Junior','Teen 1','Teen 2','Teen 3','Master 1','Master 2','Master 3','Master 4'];
+  const divs = [...new Set(allRecords.map(r => r.division).filter(Boolean))].sort((a, b) => {
+    const ai = divOrder.findIndex(d => a.toLowerCase() === d.toLowerCase());
+    const bi = divOrder.findIndex(d => b.toLowerCase() === d.toLowerCase());
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  const wcs = [...new Set(allRecords.map(r => r.weightClass).filter(Boolean))].sort((a, b) => {
     const n = x => x.toString().includes('+') ? 9999 : parseFloat(x);
     return n(a) - n(b);
   });
+
+  // Filter bar dropdowns
   const dSel = document.getElementById('filter-div');
   const wSel = document.getElementById('filter-wc');
   dSel.innerHTML = '<option value="">All Divisions</option>';
-  wSel.innerHTML  = '<option value="">All Weight Classes</option>';
-  divs.forEach(d => { dSel.innerHTML += `<option>${escHtml(d)}</option>`; });
+  wSel.innerHTML = '<option value="">All Weight Classes</option>';
+  divs.forEach(d => { dSel.innerHTML += `<option value="${escHtml(d)}">${escHtml(d)}</option>`; });
   wcs.forEach(w  => { wSel.innerHTML += `<option>${escHtml(String(w))}</option>`; });
+
+  // Compare panel dropdowns — same real values from data
+  const myDivSel = document.getElementById('my-div');
+  const myWcSel  = document.getElementById('my-wc');
+  const savedDiv = myDivSel.value;
+  const savedWc  = myWcSel.value;
+  myDivSel.innerHTML = '<option value="">— select —</option>';
+  myWcSel.innerHTML  = '<option value="">— select —</option>';
+  divs.forEach(d => { myDivSel.innerHTML += `<option ${d===savedDiv?'selected':''}>${escHtml(d)}</option>`; });
+  wcs.forEach(w  => { myWcSel.innerHTML  += `<option ${String(w)===savedWc?'selected':''}>${escHtml(String(w))}</option>`; });
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
@@ -539,7 +609,7 @@ function renderAll() {
   if (!allRecords.length) return;
 
   const q   = document.getElementById('search').value.toLowerCase();
-  const gF  = document.getElementById('filter-gender').value.toLowerCase();
+  const gF  = document.getElementById('filter-gender').value; // 'Men', 'Women', or ''
   const dF  = document.getElementById('filter-div').value;
   const wcF = document.getElementById('filter-wc').value;
   const myWC  = document.getElementById('my-wc').value;
@@ -556,11 +626,11 @@ function renderAll() {
   }
 
   let filtered = allRecords.filter(r => {
-    if (gF && (r.gender || '').toLowerCase() !== gF) return false;
-    if (dF && r.division !== dF) return false;
+    if (gF && r.gender !== gF) return false;
+    if (dF && r.division !== dF) return false; // both already normalized at load time
     if (wcF && String(r.weightClass) !== wcF) return false;
     if (q) {
-      const hay = `${r.name} ${r.meet} ${r.location} ${r.division}`.toLowerCase();
+      const hay = `${r.name_squat||""} ${r.name_bench||""} ${r.name_deadlift||""} ${r.name_total||""} ${r.division} ${r.weightClass}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -584,9 +654,17 @@ function renderAll() {
   const hasMyLifts = mySQ || myBP || myDL || myTot;
   let html = '';
 
-  ['Men', 'Women'].forEach(g => {
+  const divOrder = ['Open','Submaster','Junior','Teen 1','Teen 2','Teen 3','Master 1','Master 2','Master 3','Master 4'];
+
+  ['Men', 'Women'].filter(g => grouped[g]).forEach(g => {
     if (!grouped[g]) return;
-    Object.keys(grouped[g]).sort().forEach(d => {
+    const divsSorted = Object.keys(grouped[g]).sort((a, b) => {
+      const ai = divOrder.findIndex(d => a.toLowerCase() === d.toLowerCase());
+      const bi = divOrder.findIndex(d => b.toLowerCase() === d.toLowerCase());
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    divsSorted.forEach(d => {
       const rows = grouped[g][d].sort((a, b) => {
         const n = x => String(x).includes('+') ? 9999 : parseFloat(x);
         return n(a.weightClass) - n(b.weightClass);
@@ -605,44 +683,64 @@ function renderAll() {
         <div class="table-wrap" id="body-${divId}" style="display:none">
           <table>
             <thead><tr>
-              <th>WC (kg)</th><th>Lifter</th>
+              <th>WC</th>
               <th style="color:var(--lift-sq)">Squat</th>
+              <th class="sub-header" style="color:var(--lift-sq)">Lifter · Date</th>
               <th style="color:var(--lift-bp)">Bench</th>
+              <th class="sub-header" style="color:var(--lift-bp)">Lifter · Date</th>
               <th style="color:var(--lift-dl)">Deadlift</th>
-              <th>Total</th><th>Date</th><th>Meet</th>
-              ${hasMyLifts ? '<th>vs Record</th>' : ''}
+              <th class="sub-header" style="color:var(--lift-dl)">Lifter · Date</th>
+              <th>Total</th>
+              <th class="sub-header">Lifter · Date</th>
+              ${hasMyLifts ? '<th style="font-size:10px">SQ · BP · DL · TOT</th>' : ''}
             </tr></thead>
             <tbody>`;
 
       rows.forEach(r => {
         const isMyMatch = myWC && myDiv && String(r.weightClass) === myWC && r.division === myDiv && r.gender === g;
-        let myMark = '';
         let cmpCell = '';
 
         if (hasMyLifts) {
           if (isMyMatch && myTot && r.total) {
-            const pct = myTot / r.total * 100;
-            const barW = Math.min(pct, 100).toFixed(1);
-            const cls = pct >= 100 ? 'over' : pct >= 80 ? 'near' : '';
-            myMark = `<span class="my-lift-badge">YOU</span>`;
-            cmpCell = `<td><div class="compare-bar-wrap">
-              <div class="compare-bar"><div class="compare-bar-fill" style="width:${barW}%"></div></div>
-              <span class="compare-pct ${cls}">${pct.toFixed(1)}%</span>
-            </div></td>`;
+            const mkBar = (mine, rec, color) => {
+              if (!mine || !rec) return '';
+              const p = Math.min(mine/rec*100, 100).toFixed(1);
+              const over = mine >= rec;
+              return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+                <div style="width:52px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;flex-shrink:0">
+                  <div style="width:${p}%;height:100%;background:${over?'var(--green)':color};border-radius:2px"></div>
+                </div>
+                <span style="font-size:10px;color:${over?'var(--green)':'var(--muted)'};min-width:34px">${(mine/rec*100).toFixed(0)}%</span>
+              </div>`;
+            };
+            cmpCell = `<td style="padding:6px 10px">
+              ${mkBar(mySQ, r.squat,    'var(--lift-sq)')}
+              ${mkBar(myBP, r.bench,    'var(--lift-bp)')}
+              ${mkBar(myDL, r.deadlift, 'var(--lift-dl)')}
+              ${mkBar(myTot,r.total,    'var(--accent)')}
+            </td>`;
           } else {
             cmpCell = '<td></td>';
           }
         }
 
+        const myBadge = isMyMatch ? '<span class="my-lift-badge">YOU</span>' : '';
+
+        const lifterDate = (name, date) => {
+          if (!name) return '<span style="color:var(--muted)">—</span>';
+          return `<span class="sub-name">${escHtml(name)}</span><span class="sub-date">${escHtml(date || '')}</span>`;
+        };
+
         html += `<tr class="${isMyMatch ? 'my-lift-row' : ''}">
-          <td class="wc-cell">${escHtml(String(r.weightClass))}</td>
-          <td class="name-cell">${escHtml(r.name || '—')}${myMark}</td>
+          <td class="wc-cell">${escHtml(String(r.weightClass))}kg${myBadge}</td>
           <td class="lift-cell lift-sq">${fmtW(r.squat)}</td>
+          <td class="sub-cell">${lifterDate(r.name_squat, r.date_squat)}</td>
           <td class="lift-cell lift-bp">${fmtW(r.bench)}</td>
+          <td class="sub-cell">${lifterDate(r.name_bench, r.date_bench)}</td>
           <td class="lift-cell lift-dl">${fmtW(r.deadlift)}</td>
+          <td class="sub-cell">${lifterDate(r.name_deadlift, r.date_deadlift)}</td>
           <td class="lift-cell lift-total">${fmtW(r.total)}</td>
-          <td class="date-cell">${escHtml(r.date || '—')}</td>
-          <td class="meet-cell" title="${escHtml(r.meet || '')}">${escHtml(r.meet || '—')}</td>
+          <td class="sub-cell">${lifterDate(r.name_total, r.date_total)}</td>
           ${cmpCell}
         </tr>`;
       });
@@ -653,16 +751,90 @@ function renderAll() {
 
   container.innerHTML = html;
 
-  // Auto-expand on match or small result set
+  // Show compare result banner
+  const banner = document.getElementById('compare-result');
+  if (hasMyLifts && myWC && myDiv) {
+    // Find the matching record
+    const match = filtered.find(r => String(r.weightClass) === myWC && r.division === myDiv);
+    if (match) {
+      const pct = myTot && match.total ? (myTot / match.total * 100) : 0;
+      const diff = myTot && match.total ? (myTot - match.total) : 0;
+      const diffStr = diff >= 0
+        ? `<span style="color:var(--green)">+${diff.toFixed(1)} kg above record 🏆</span>`
+        : `<span style="color:var(--gold)">${Math.abs(diff).toFixed(1)} kg below record</span>`;
+      banner.style.display = 'block';
+      const liftRows = [
+        { label: 'Squat',    mine: mySQ,  record: match.squat,    holder: match.name_squat,    color: 'var(--lift-sq)' },
+        { label: 'Bench',    mine: myBP,  record: match.bench,    holder: match.name_bench,    color: 'var(--lift-bp)' },
+        { label: 'Deadlift', mine: myDL,  record: match.deadlift, holder: match.name_deadlift, color: 'var(--lift-dl)' },
+        { label: 'Total',    mine: myTot, record: match.total,    holder: match.name_total,    color: 'var(--text)'    },
+      ];
+
+      const liftHTML = liftRows.map(({ label, mine, record, holder, color }) => {
+        if (!mine || !record) return '';
+        const p = (mine / record * 100);
+        const d = mine - record;
+        const barW = Math.min(p, 100).toFixed(1);
+        const barColor = p >= 100 ? 'var(--green)' : p >= 90 ? 'var(--gold)' : 'var(--accent)';
+        const diffLabel = d >= 0
+          ? `<span style="color:var(--green)">+${d.toFixed(1)} kg 🏆</span>`
+          : `<span style="color:var(--muted)">${d.toFixed(1)} kg</span>`;
+        return `
+          <div style="display:grid;grid-template-columns:70px 1fr 80px 120px 90px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;color:${color}">${label}</span>
+            <div style="background:var(--border);border-radius:3px;height:6px;overflow:hidden">
+              <div style="width:${barW}%;height:100%;background:${barColor};border-radius:3px;transition:width .4s"></div>
+            </div>
+            <span style="font-size:13px;font-weight:600">${mine.toFixed(1)}<span style="color:var(--muted);font-size:10px"> kg</span></span>
+            <span style="font-size:11px;color:var(--muted)">rec: ${record} (${escHtml(holder||'—')})</span>
+            <span style="font-size:12px">${diffLabel} <span style="color:var(--muted);font-size:10px">${p.toFixed(1)}%</span></span>
+          </div>`;
+      }).filter(Boolean).join('');
+
+      banner.innerHTML = `
+        <div style="margin-bottom:10px">
+          <strong style="color:var(--accent);font-family:'Barlow Condensed',sans-serif;font-size:16px;letter-spacing:.5px">
+            ⚡ ${escHtml(myDiv.toUpperCase())} · ${escHtml(myWC)}kg
+          </strong>
+          <span style="color:var(--muted);font-size:11px;margin-left:10px">vs IPL World Record</span>
+        </div>
+        <div style="display:grid;grid-template-columns:70px 1fr 80px 120px 90px;gap:10px;padding:4px 0;margin-bottom:2px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Lift</span>
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">% of record</span>
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Yours</span>
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Record holder</span>
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px">Difference</span>
+        </div>
+        ${liftHTML}
+        <div style="margin-top:8px;font-size:11px;color:var(--muted)">↓ Highlighted row auto-expanded below</div>
+      `;
+    } else {
+      banner.style.display = 'block';
+      banner.innerHTML = `<span style="color:var(--muted)">No record found for ${escHtml(myDiv)} ${escHtml(myWC)}kg. Check your division and weight class selection.</span>`;
+    }
+  } else if (hasMyLifts) {
+    banner.style.display = 'block';
+    banner.innerHTML = `<span style="color:var(--muted)">⚡ Select your <strong>Weight Class</strong> and <strong>Division</strong> in the Compare panel above to see how you stack up.</span>`;
+  } else {
+    banner.style.display = 'none';
+  }
+
+  // Auto-expand on match or small result set; scroll to matched row
+  let firstMatch = null;
   document.querySelectorAll('.division-block').forEach(b => {
     const id = b.id;
-    if (filtered.length <= 15 || b.querySelector('.my-lift-row')) {
+    const hasMatch = b.querySelector('.my-lift-row');
+    if (filtered.length <= 15 || hasMatch) {
       const body = document.getElementById('body-' + id);
       const chev = document.getElementById('chev-' + id);
       if (body) body.style.display = 'block';
       if (chev) chev.classList.add('open');
     }
+    if (hasMatch && !firstMatch) firstMatch = hasMatch;
   });
+  if (firstMatch) {
+    setTimeout(() => firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+  }
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
